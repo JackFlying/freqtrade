@@ -1,0 +1,2 @@
+import{L as e,ct as t,g as n,p as r}from"./vue.runtime.esm-bundler-DKbDQ0Fl.js";var i={viewBox:`0 0 24 24`,width:`1.2em`,height:`1.2em`};function a(t,a){return e(),n(`svg`,i,[...a[0]||=[r(`path`,{fill:`currentColor`,d:`M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12z`},null,-1)]])}var o=t({name:`mdi-close`,render:a});export{o as t};
+//# sourceMappingURL=close-BI0BEPI2.js.map

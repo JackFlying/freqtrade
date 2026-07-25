@@ -1,0 +1,2 @@
+import{L as e,et as t,g as n,y as r}from"./vue.runtime.esm-bundler-DKbDQ0Fl.js";import{B as i,f as a}from"./index-CXSzRURc.js";import{t as o}from"./DraggableContainer-Ba5K6f5Q.js";var s={},c={class:`max-w-xl mx-auto p-4 my-5`};function l(i,s){let l=a,u=o;return e(),n(`div`,c,[r(u,{header:`Freqtrade bot Login`,class:`px-4 py-2`},{default:t(()=>[r(l)]),_:1})])}var u=i(s,[[`render`,l]]);export{u as default};
+//# sourceMappingURL=LoginView-RvgzAvML.js.map

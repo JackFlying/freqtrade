@@ -1,0 +1,2 @@
+import{B as e,L as t,O as n,b as r,et as i,m as a,xt as o}from"./vue.runtime.esm-bundler-DKbDQ0Fl.js";import{A as s}from"./deepClone-CzjseqfJ.js";import{n as c}from"./Input-CSX9NZPn.js";var l=r({__name:`Label`,props:{for:{type:String,required:!1},asChild:{type:Boolean,required:!1},as:{type:null,required:!1,default:`label`}},setup(r){let l=r;return c(),(r,c)=>(t(),a(o(s),n(l,{onMousedown:c[0]||=e=>{!e.defaultPrevented&&e.detail>1&&e.preventDefault()}}),{default:i(()=>[e(r.$slots,`default`)]),_:3},16))}});export{l as t};
+//# sourceMappingURL=Label-CHd1diAs.js.map
