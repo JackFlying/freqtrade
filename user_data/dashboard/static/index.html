@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>趋势候选看板</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">BINANCE SPOT · USDT</p>
+                <h1>趋势候选看板</h1>
+            </div>
+            <div class="topbar-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">正在连接</span>
+                <span class="divider"></span>
+                <span>最近扫描：</span>
+                <strong id="updatedAt">--</strong>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <aside class="sidebar">
+                <div class="sidebar-head">
+                    <div>
+                        <span class="section-label">候选币</span>
+                        <strong id="candidateCount">0</strong>
+                    </div>
+                    <button class="scan-button" id="refreshButton" type="button" title="立即扫描">
+                        ↻
+                        <span>立即扫描</span>
+                    </button>
+                </div>
+
+                <div class="hyperparameter">
+                    <label for="minChange20dInput">
+                        <span>20日最小涨幅 X</span>
+                        <span class="parameter-value">
+                            <input id="minChange20dInput" type="number" min="-100" max="10000" step="0.5">
+                            <b>%</b>
+                        </span>
+                    </label>
+                    <label for="maxDrawdownInput">
+                        <span>20日高点最大回撤 X</span>
+                        <span class="parameter-value">
+                            <input id="maxDrawdownInput" type="number" min="0" max="100" step="0.5">
+                            <b>%</b>
+                        </span>
+                    </label>
+                    <small id="settingsStatus">扫描后生效</small>
+                </div>
+
+                <div class="filter-rules">
+                    <div class="filter-rules-title">
+                        <span>候选筛选条件</span>
+                        <b>全部满足</b>
+                    </div>
+                    <ul>
+                        <li>24h 成交额 &gt; 100万 USDT</li>
+                        <li>上市时间 ≥ 120天</li>
+                        <li>排除稳定币、杠杆代币</li>
+                        <li>价格 &gt; MA7 &gt; MA20 &gt; MA99</li>
+                        <li>20日涨幅 &gt; <strong id="minChangeRule">5%</strong></li>
+                        <li>20日高点回撤 ≤ <strong id="maxDrawdownRule">12%</strong></li>
+                    </ul>
+                </div>
+
+                <label class="search-box">
+                    <span>⌕</span>
+                    <input id="searchInput" type="search" placeholder="搜索交易对" autocomplete="off">
+                </label>
+
+                <div class="candidate-list" id="candidateList">
+                    <div class="empty-state">正在读取候选列表...</div>
+                </div>
+            </aside>
+
+            <section class="content">
+                <div class="chart-header">
+                    <div class="pair-title">
+                        <div>
+                            <span class="section-label">当前交易对</span>
+                            <h2 id="pairName">--</h2>
+                        </div>
+                        <span class="provisional-badge" id="provisionalBadge">临时日线</span>
+                    </div>
+
+                    <div class="timeframe-tabs" id="timeframeTabs" aria-label="K线周期">
+                        <button type="button" data-timeframe="15m">15分</button>
+                        <button type="button" data-timeframe="1h">1时</button>
+                        <button type="button" data-timeframe="4h">4时</button>
+                        <button type="button" data-timeframe="1d" class="active">日线</button>
+                    </div>
+                </div>
+
+                <div class="metrics">
+                    <div class="metric primary">
+                        <span>最新价格 / 今日涨跌</span>
+                        <strong id="latestPrice">--</strong>
+                        <small id="priceChange">--</small>
+                    </div>
+                    <div class="metric ma7">
+                        <span>MA7</span>
+                        <strong id="ma7Value">--</strong>
+                    </div>
+                    <div class="metric ma20">
+                        <span>MA20</span>
+                        <strong id="ma20Value">--</strong>
+                    </div>
+                    <div class="metric ma99">
+                        <span>MA99</span>
+                        <strong id="ma99Value">--</strong>
+                    </div>
+                    <div class="metric">
+                        <span>20日涨幅</span>
+                        <strong id="change20dValue">--</strong>
+                    </div>
+                    <div class="metric">
+                        <span>20日高点回撤</span>
+                        <strong id="drawdown20dValue">--</strong>
+                    </div>
+                    <div class="metric">
+                        <span>24h成交额</span>
+                        <strong id="volume24h">--</strong>
+                    </div>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-legend" aria-hidden="true">
+                        <span><i class="legend-line ma7-bg"></i>MA7</span>
+                        <span><i class="legend-line ma20-bg"></i>MA20</span>
+                        <span><i class="legend-line ma99-bg"></i>MA99</span>
+                    </div>
+                    <div class="chart-tools">
+                        <span>触摸板捏合缩放 · 左右滑动时间</span>
+                        <button type="button" id="refreshChartButton">刷新 K 线</button>
+                        <button type="button" id="zoomOutButton" aria-label="缩小图表">−</button>
+                        <button type="button" id="zoomInButton" aria-label="放大图表">+</button>
+                        <button type="button" id="resetChartButton">重置视图</button>
+                    </div>
+                    <div class="chart-loading" id="chartLoading">正在加载 K 线...</div>
+                    <canvas id="chartCanvas" aria-label="K线和移动平均线图表"></canvas>
+                    <div class="chart-tooltip" id="chartTooltip"></div>
+                </div>
+
+                <div class="footnote">
+                    <span>当前列表仅包含满足全部筛选条件的候选币</span>
+                    <span>仅供筛选展示，不参与自动下单</span>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js" defer></script>
+</body>
+</html>

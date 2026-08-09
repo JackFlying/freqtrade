@@ -1,0 +1,315 @@
+{
+    // JSON Schema 地址：供 IDE 校验配置格式并提供参数提示。
+    "$schema": "https://schema.freqtrade.io/schema.json",
+
+    // 机器人名称：用于日志、FreqUI 和 API 中识别当前实例，不影响交易逻辑。
+    "bot_name": "binance-spot-scanner",
+
+    // 使用的策略类名称，对应 SpotScanStrategy.py 中的 SpotScanStrategy。
+    "strategy": "SpotScanStrategy",
+
+    // 自定义策略文件所在目录。
+    "strategy_path": "user_data/strategies",
+
+    // K 线周期：每 15 分钟产生一根 K 线并计算一次新信号。
+    "timeframe": "15m",
+
+    // 最大同时持有的交易数：当前最多允许 4 笔未结束的交易。
+    "max_open_trades": 4,
+
+    // 仓位计价货币：使用 USDT 买入其他币种。
+    "stake_currency": "USDT",
+
+    // 单笔交易投入金额：每次开仓使用 200 USDT。
+    "stake_amount": 200,
+
+    // 允许用于交易的余额比例：最多使用总余额的 99%，预留 1% 作为缓冲。
+    // 实际资金占用仍会受到 stake_amount 和 max_open_trades 限制。
+    "tradable_balance_ratio": 0.99,
+
+    // 模拟交易开关：true 表示不向交易所提交真实订单。
+    "dry_run": true,
+
+    // 模拟交易的初始钱包余额，仅在 dry_run=true 时生效。
+    "dry_run_wallet": 1000,
+
+    // 交易模式：spot 表示现货交易。
+    "trading_mode": "spot",
+
+    // 保证金模式：现货交易不使用保证金，因此留空。
+    "margin_mode": "",
+
+    // 机器人停止时是否撤销未成交订单：false 表示不因程序退出自动撤单。
+    "cancel_open_orders_on_exit": false,
+
+    // 入场和出场限价单的未成交超时设置。
+    "unfilledtimeout": {
+        // 入场订单超过 10 分钟未成交时执行超时处理。
+        "entry": 10,
+
+        // 出场订单超过 10 分钟未成交时执行超时处理。
+        "exit": 10,
+
+        // 出场订单允许的超时次数；0 表示不限制超时重试次数。
+        "exit_timeout_count": 0,
+
+        // entry 和 exit 超时值的时间单位。
+        "unit": "minutes"
+    },
+
+    // 入场订单的价格计算方式。
+    "entry_pricing": {
+        // 使用交易方向同侧价格：买入时采用买方一侧价格。
+        "price_side": "same",
+
+        // 使用订单簿报价，而不是仅使用最新成交价。
+        "use_order_book": true,
+
+        // 使用订单簿第 1 档价格。
+        "order_book_top": 1,
+
+        // 订单簿价格与最新成交价之间的平衡系数；0.0 表示优先使用订单簿同侧价格。
+        "price_last_balance": 0.0,
+
+        // 下单前是否检查订单簿买卖盘深度。
+        "check_depth_of_market": {
+            // false 表示关闭买卖盘深度过滤。
+            "enabled": false,
+
+            // 启用深度检查时要求的买盘与卖盘比例阈值；当前因 enabled=false 而不生效。
+            "bids_to_ask_delta": 1
+        }
+    },
+
+    // 出场订单的价格计算方式。
+    "exit_pricing": {
+        // 使用交易方向同侧价格：卖出时采用卖方一侧价格。
+        "price_side": "same",
+
+        // 使用订单簿报价，而不是仅使用最新成交价。
+        "use_order_book": true,
+
+        // 使用订单簿第 1 档价格。
+        "order_book_top": 1
+    },
+
+    // 交易所连接及交易对范围设置。
+    "exchange": {
+        // 交易所名称：Binance。
+        "name": "binance",
+
+        // Binance API Key；模拟交易读取公开行情时可以留空。
+        "key": "",
+
+        // Binance API Secret；模拟交易读取公开行情时可以留空。
+        "secret": "",
+
+        // CCXT 同步客户端配置。
+        "ccxt_config": {
+            // 启用 CCXT 请求频率限制，降低触发交易所限流的风险。
+            "enableRateLimit": true,
+
+            // 自定义 Binance API 地址。
+            "urls": {
+                // API 类型及其对应地址。
+                "api": {
+                    // Binance 公开市场数据 API v3 地址。
+                    "public": "https://data-api.binance.vision/api/v3",
+
+                    // Binance 公开市场数据 API v1 地址。
+                    "v1": "https://data-api.binance.vision/api/v1"
+                }
+            },
+
+            // 传递给 CCXT 的附加选项。
+            "options": {
+                // 默认只加载和使用现货市场。
+                "defaultType": "spot",
+
+                // 获取市场列表时的过滤设置。
+                "fetchMarkets": {
+                    // 只获取现货类型的市场。
+                    "types": [
+                        "spot"
+                    ]
+                }
+            }
+        },
+
+        // CCXT 异步客户端配置，用于并发获取行情等异步请求。
+        "ccxt_async_config": {
+            // 启用 CCXT 请求频率限制，降低触发交易所限流的风险。
+            "enableRateLimit": true,
+
+            // 自定义 Binance API 地址。
+            "urls": {
+                // API 类型及其对应地址。
+                "api": {
+                    // Binance 公开市场数据 API v3 地址。
+                    "public": "https://data-api.binance.vision/api/v3",
+
+                    // Binance 公开市场数据 API v1 地址。
+                    "v1": "https://data-api.binance.vision/api/v1"
+                }
+            },
+
+            // 传递给 CCXT 异步客户端的附加选项。
+            "options": {
+                // 默认只加载和使用现货市场。
+                "defaultType": "spot",
+
+                // 获取市场列表时的过滤设置。
+                "fetchMarkets": {
+                    // 只获取现货类型的市场。
+                    "types": [
+                        "spot"
+                    ]
+                }
+            }
+        },
+
+        // 交易对白名单：正则表达式匹配所有以 USDT 计价的交易对。
+        "pair_whitelist": [
+            ".*/USDT"
+        ],
+
+        // 交易对黑名单：即使匹配白名单，也会排除以下交易对。
+        "pair_blacklist": [
+            // 排除名称以 UP、DOWN、BULL、BEAR 结尾的杠杆代币。
+            ".*(UP|DOWN|BULL|BEAR)/USDT",
+
+            // 排除稳定币及部分法币与 USDT 之间的交易对。
+            "(USDC|FDUSD|TUSD|USDP|DAI|EUR|TRY|BRL)/USDT"
+        ]
+    },
+
+    // 交易对列表生成方式。
+    "pairlists": [
+        {
+            // 使用配置中的静态白名单，并支持上方的正则表达式。
+            "method": "StaticPairList"
+        }
+    ],
+
+    // Telegram 通知和机器人控制设置。
+    "telegram": {
+        // 是否启用 Telegram；false 表示关闭。
+        "enabled": false,
+
+        // Telegram Bot Token；未启用时留空。
+        "token": "",
+
+        // 接收通知的 Telegram Chat ID；未启用时留空。
+        "chat_id": ""
+    },
+
+    // Freqtrade REST API、WebSocket 和 FreqUI 后端设置。
+    "api_server": {
+        // 启用 API 服务，以便 FreqUI 和 API 客户端连接。
+        "enabled": true,
+
+        // 只监听本机回环地址，局域网或公网设备无法直接访问。
+        "listen_ip_address": "127.0.0.1",
+
+        // API 服务监听端口。
+        "listen_port": 8081,
+
+        // API 日志级别：只记录错误级别的信息。
+        "verbosity": "error",
+
+        // 是否开放 OpenAPI/Swagger 接口文档。
+        "enable_openapi": false,
+
+        // JWT 签名密钥，用于保护 API 登录令牌；真实部署时应替换为随机强密钥。
+        "jwt_secret_key": "scanner-local-jwt-secret-change-me",
+
+        // WebSocket 连接令牌；真实部署时应替换为随机强令牌。
+        "ws_token": "scanner-local-websocket-token-change-me",
+
+        // 允许跨域访问 API 的来源列表；空数组表示不额外允许跨域来源。
+        "CORS_origins": [],
+
+        // FreqUI 和 REST API 登录用户名。
+        "username": "freqtrader",
+
+        // FreqUI 和 REST API 登录密码；真实部署时应更换强密码。
+        "password": "freqtrade-local"
+    },
+
+    // 程序启动后的机器人状态：stopped 表示启动服务但不自动开始交易。
+    "initial_state": "stopped",
+
+    // 是否允许通过 API 或 FreqUI 手动强制入场；false 用于防止误操作。
+    "force_entry_enable": false,
+
+    // Freqtrade 内部运行参数。
+    "internals": {
+        // 主处理循环的最短间隔，单位为秒。
+        "process_throttle_secs": 5
+    },
+
+    // 当前项目自定义的市场扫描器参数。
+    "scanner": {
+        // 每个交易对获取的 K 线数量。
+        "candle_limit": 250,
+
+        // 同时执行行情扫描任务的最大并发数。
+        "concurrency": 6,
+
+        // 最低计价货币成交量过滤值；0 表示不按成交额设置最低门槛。
+        "minimum_quote_volume": 0,
+
+        // 每次扫描最多保留或输出的结果数量。
+        "maximum_results": 100,
+
+        // 扫描结果文件的输出目录。
+        "output_directory": "user_data/scan_results",
+
+        // 独立的日线趋势筛选器，仅用于展示，不参与交易机器人下单。
+        "daily_trend": {
+            // 进入观察范围所需的最低 24 小时 USDT 成交额。
+            "minimum_quote_volume": 1000000,
+
+            // 至少需要 120 根已收盘日线，用于排除上市不足 120 天的币。
+            "minimum_listing_days": 120,
+
+            // 成交额交易池每 24 小时重新联网筛选一次。
+            "universe_refresh_seconds": 86400,
+
+            // 未收盘日线和 MA 每 15 分钟更新一次。
+            "update_interval_seconds": 900,
+
+            // 本地保留约一年的日线，为 MA99 提供充足历史数据。
+            "history_candle_limit": 365,
+
+            // 同时更新日线数据的最大请求数。
+            "concurrency": 6,
+
+            // 独立日线缓存目录，其中包含每 15 分钟更新的未收盘日线。
+            "cache_directory": "user_data/scan_data/daily_trend",
+
+            // 日线趋势筛选结果输出目录。
+            "output_directory": "user_data/scan_results",
+
+            // 额外排除的稳定币基础资产，不影响交易机器人的原有白名单。
+            "stablecoin_bases": [
+                "AEUR",
+                "BUSD",
+                "DAI",
+                "EURI",
+                "FDUSD",
+                "FRAX",
+                "RLUSD",
+                "TUSD",
+                "USDC",
+                "USDD",
+                "USDE",
+                "USDP",
+                "USDS",
+                "USD1",
+                "USTC",
+                "XUSD"
+            ]
+        }
+    }
+}
