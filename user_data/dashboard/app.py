@@ -4,6 +4,7 @@ import asyncio
 import csv
 import json
 import math
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -25,11 +26,22 @@ CONFIG_PATH = ROOT_DIR / "user_data/config_scan.json"
 RESULTS_DIR = ROOT_DIR / "user_data/scan_results"
 CANDIDATES_PATH = RESULTS_DIR / "daily_trend_candidates.csv"
 STATUS_PATH = RESULTS_DIR / "daily_trend_status.json"
+PREVIEW_RESULTS_DIR = RESULTS_DIR / "preview"
+PREVIEW_CANDIDATES_PATH = PREVIEW_RESULTS_DIR / "daily_trend_candidates.csv"
+PREVIEW_STATUS_PATH = PREVIEW_RESULTS_DIR / "daily_trend_status.json"
+PREVIEW_SETTINGS_PATH = PREVIEW_RESULTS_DIR / "settings.json"
 ALLOWED_TIMEFRAMES = {"15m", "1h", "4h", "1d"}
 OHLCV_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 MA_PERIODS = (7, 20, 99)
+SCREENING_SETTING_KEYS = {
+    "min_change_20d",
+    "max_change_20d",
+    "max_drawdown_20d",
+    "lookback_days",
+    "use_4h_ma_filter",
+}
 
-app = FastAPI(title="Freqtrade Candidate Dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="Freqtrade Strategy Console", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _response_cache: dict[tuple[str, str, int], tuple[float, dict[str, Any]]] = {}
@@ -46,7 +58,13 @@ _daily_open_locks: dict[str, asyncio.Lock] = {}
 
 class DashboardSettings(BaseModel):
     min_change_20d: float = Field(ge=-100, le=10000)
+    max_change_20d: float = Field(ge=-100, le=10000)
     max_drawdown_20d: float = Field(ge=0, le=100)
+    lookback_days: int = Field(default=20, ge=2, le=364)
+    use_4h_ma_filter: bool = False
+    ma7_exit_threshold_pct: float = Field(default=2.0, ge=0, le=100)
+    hard_stoploss_pct: float = Field(default=6.0, ge=0.1, le=99)
+    entry_enabled: bool = True
 
 
 def read_config() -> dict[str, Any]:
@@ -61,12 +79,19 @@ def parse_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def read_candidates() -> list[dict[str, Any]]:
-    if not CANDIDATES_PATH.exists():
+def preview_active() -> bool:
+    return PREVIEW_CANDIDATES_PATH.exists() and PREVIEW_STATUS_PATH.exists()
+
+
+def read_candidates(path: Path | None = None) -> list[dict[str, Any]]:
+    candidate_path = path or (
+        PREVIEW_CANDIDATES_PATH if preview_active() else CANDIDATES_PATH
+    )
+    if not candidate_path.exists():
         return []
 
     candidates = []
-    with CANDIDATES_PATH.open(encoding="utf-8", newline="") as csv_file:
+    with candidate_path.open(encoding="utf-8", newline="") as csv_file:
         for row in csv.DictReader(csv_file):
             candidates.append(
                 {
@@ -90,10 +115,11 @@ def read_candidates() -> list[dict[str, Any]]:
     return candidates
 
 
-def read_status() -> dict[str, Any]:
-    if not STATUS_PATH.exists():
+def read_status(path: Path | None = None) -> dict[str, Any]:
+    status_path = path or (PREVIEW_STATUS_PATH if preview_active() else STATUS_PATH)
+    if not status_path.exists():
         return {}
-    return json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+    return json.loads(status_path.read_text(encoding="utf-8"))
 
 
 def runtime_settings_path() -> Path:
@@ -107,10 +133,16 @@ def runtime_settings_path() -> Path:
     return path
 
 
-def read_runtime_settings() -> dict[str, float]:
+def read_runtime_settings() -> dict[str, float | bool | int]:
     defaults = {
         "min_change_20d": 5.0,
+        "max_change_20d": 100.0,
         "max_drawdown_20d": 12.0,
+        "lookback_days": 20,
+        "use_4h_ma_filter": False,
+        "ma7_exit_threshold_pct": 2.0,
+        "hard_stoploss_pct": 6.0,
+        "entry_enabled": True,
     }
     path = runtime_settings_path()
     if not path.exists():
@@ -121,19 +153,54 @@ def read_runtime_settings() -> dict[str, float]:
             "min_change_20d": float(
                 payload.get("min_change_20d", defaults["min_change_20d"])
             ),
+            "max_change_20d": float(
+                payload.get("max_change_20d", defaults["max_change_20d"])
+            ),
             "max_drawdown_20d": float(
                 payload.get("max_drawdown_20d", defaults["max_drawdown_20d"])
-            )
+            ),
+            "lookback_days": int(
+                payload.get("lookback_days", defaults["lookback_days"])
+            ),
+            "use_4h_ma_filter": bool(
+                payload.get(
+                    "use_4h_ma_filter",
+                    defaults["use_4h_ma_filter"],
+                )
+            ),
+            "ma7_exit_threshold_pct": float(
+                payload.get(
+                    "ma7_exit_threshold_pct",
+                    defaults["ma7_exit_threshold_pct"],
+                )
+            ),
+            "hard_stoploss_pct": float(
+                payload.get(
+                    "hard_stoploss_pct",
+                    defaults["hard_stoploss_pct"],
+                )
+            ),
+            "entry_enabled": bool(
+                payload.get("entry_enabled", defaults["entry_enabled"])
+            ),
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return defaults
 
 
-def write_runtime_settings(settings: DashboardSettings) -> dict[str, float]:
+def write_runtime_settings(
+    settings: DashboardSettings,
+) -> dict[str, float | bool | int]:
     path = runtime_settings_path()
     payload = {
         "min_change_20d": settings.min_change_20d,
+        "max_change_20d": settings.max_change_20d,
         "max_drawdown_20d": settings.max_drawdown_20d,
+        "lookback_days": settings.lookback_days,
+        "use_4h_ma_filter": settings.use_4h_ma_filter,
+        "ma7_exit_threshold_pct": settings.ma7_exit_threshold_pct,
+        "hard_stoploss_pct": settings.hard_stoploss_pct,
+        "entry_enabled": settings.entry_enabled,
     }
     temp_path = path.with_suffix(".json.tmp")
     temp_path.write_text(
@@ -142,6 +209,57 @@ def write_runtime_settings(settings: DashboardSettings) -> dict[str, float]:
     )
     temp_path.replace(path)
     return payload
+
+
+def settings_payload(settings: DashboardSettings) -> dict[str, float | bool | int]:
+    return {
+        "min_change_20d": settings.min_change_20d,
+        "max_change_20d": settings.max_change_20d,
+        "max_drawdown_20d": settings.max_drawdown_20d,
+        "lookback_days": settings.lookback_days,
+        "use_4h_ma_filter": settings.use_4h_ma_filter,
+        "ma7_exit_threshold_pct": settings.ma7_exit_threshold_pct,
+        "hard_stoploss_pct": settings.hard_stoploss_pct,
+        "entry_enabled": settings.entry_enabled,
+    }
+
+
+def write_preview_settings(settings: DashboardSettings) -> None:
+    PREVIEW_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    for path in PREVIEW_RESULTS_DIR.iterdir():
+        if path.is_file():
+            path.unlink()
+    temp_path = PREVIEW_SETTINGS_PATH.with_suffix(".json.tmp")
+    temp_path.write_text(
+        json.dumps(settings_payload(settings), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temp_path.replace(PREVIEW_SETTINGS_PATH)
+
+
+def promote_preview_if_matching(settings: DashboardSettings) -> bool:
+    if not preview_active() or not PREVIEW_SETTINGS_PATH.exists():
+        return False
+    try:
+        preview_settings = json.loads(PREVIEW_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    saved_settings = settings_payload(settings)
+    if any(
+        preview_settings.get(key) != saved_settings.get(key)
+        for key in SCREENING_SETTING_KEYS
+    ):
+        return False
+
+    for source in PREVIEW_RESULTS_DIR.iterdir():
+        if source.name == PREVIEW_SETTINGS_PATH.name or not source.is_file():
+            continue
+        destination = RESULTS_DIR / source.name
+        temp_path = destination.with_suffix(f"{destination.suffix}.tmp")
+        shutil.copy2(source, temp_path)
+        temp_path.replace(destination)
+    shutil.rmtree(PREVIEW_RESULTS_DIR)
+    return True
 
 
 def read_universe() -> dict[str, dict[str, Any]]:
@@ -430,38 +548,72 @@ async def candidates() -> dict[str, Any]:
     return {
         "candidates": items,
         "status": read_status(),
+        "is_preview": preview_active(),
         "timeframes": sorted(ALLOWED_TIMEFRAMES, key=("15m", "1h", "4h", "1d").index),
     }
 
 
 @app.get("/api/settings")
-async def get_settings() -> dict[str, float]:
-    return read_runtime_settings()
+async def get_settings() -> dict[str, float | bool | int]:
+    settings = read_runtime_settings()
+    scanner_config = read_config()["scanner"]["daily_trend"]
+    return {
+        **settings,
+        "candidate_scan_interval_seconds": int(
+            scanner_config["update_interval_seconds"]
+        ),
+    }
 
 
 @app.put("/api/settings")
 async def update_settings(settings: DashboardSettings) -> dict[str, Any]:
+    if _scan_state["running"] or _scan_lock.locked():
+        raise HTTPException(status_code=409, detail="扫描进行中，请完成后再保存")
+    if settings.max_change_20d <= settings.min_change_20d:
+        raise HTTPException(
+            status_code=422,
+            detail="最大涨幅必须大于最小涨幅",
+        )
+    saved_settings = write_runtime_settings(settings)
+    promoted = promote_preview_if_matching(settings)
     return {
         "status": "saved",
-        "settings": write_runtime_settings(settings),
+        "settings": saved_settings,
+        "preview_promoted": promoted,
     }
 
 
-async def run_manual_scan() -> None:
+async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
     async with _scan_lock:
+        is_preview = settings is not None
+        if is_preview:
+            write_preview_settings(settings)
         _scan_state.update(
             {
                 "running": True,
+                "is_preview": is_preview,
                 "started_at": pd.Timestamp.now(tz="UTC").isoformat(),
                 "finished_at": None,
                 "return_code": None,
-                "message": "正在刷新成交额、日线和 MA...",
+                "message": "正在预览草稿参数..." if is_preview else "正在刷新成交额、日线和 MA...",
             }
         )
-        process = await asyncio.create_subprocess_exec(
+        command = [
             sys.executable,
             str(ROOT_DIR / "user_data/scripts/screen_daily_trend.py"),
             "--refresh-universe",
+        ]
+        if is_preview:
+            command.extend(
+                [
+                    "--settings-file",
+                    str(PREVIEW_SETTINGS_PATH),
+                    "--output-directory",
+                    str(PREVIEW_RESULTS_DIR),
+                ]
+            )
+        process = await asyncio.create_subprocess_exec(
+            *command,
             cwd=ROOT_DIR,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -473,7 +625,11 @@ async def run_manual_scan() -> None:
         if process.returncode == 0:
             _response_cache.clear()
             asyncio.create_task(prewarm_daily_open_caches())
-            message = final_line or "扫描完成"
+            message = (
+                "预览完成，结果尚未用于交易"
+                if is_preview
+                else final_line or "扫描完成"
+            )
         elif process.returncode == 75:
             message = "定时扫描正在运行，请稍后再试"
         else:
@@ -490,11 +646,11 @@ async def run_manual_scan() -> None:
 
 
 @app.post("/api/scan")
-async def start_scan() -> dict[str, Any]:
+async def start_scan(settings: DashboardSettings | None = None) -> dict[str, Any]:
     if _scan_state["running"] or _scan_lock.locked():
         return _scan_state.copy()
 
-    asyncio.create_task(run_manual_scan())
+    asyncio.create_task(run_manual_scan(settings))
     await asyncio.sleep(0)
     return _scan_state.copy()
 

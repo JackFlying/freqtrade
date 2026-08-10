@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="color-scheme" content="dark">
-    <title>趋势候选看板</title>
+    <meta name="color-scheme" content="light">
+    <title>趋势策略控制台</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
         <header class="topbar">
             <div>
                 <p class="eyebrow">BINANCE SPOT · USDT</p>
-                <h1>趋势候选看板</h1>
+                <h1>趋势策略控制台</h1>
             </div>
             <div class="topbar-status">
                 <span class="status-dot" id="statusDot"></span>
@@ -29,44 +29,12 @@
                     <div>
                         <span class="section-label">候选币</span>
                         <strong id="candidateCount">0</strong>
+                        <span class="preview-badge" id="previewBadge" hidden>预览</span>
                     </div>
                     <button class="scan-button" id="refreshButton" type="button" title="立即扫描">
                         ↻
                         <span>立即扫描</span>
                     </button>
-                </div>
-
-                <div class="hyperparameter">
-                    <label for="minChange20dInput">
-                        <span>20日最小涨幅 X</span>
-                        <span class="parameter-value">
-                            <input id="minChange20dInput" type="number" min="-100" max="10000" step="0.5">
-                            <b>%</b>
-                        </span>
-                    </label>
-                    <label for="maxDrawdownInput">
-                        <span>20日高点最大回撤 X</span>
-                        <span class="parameter-value">
-                            <input id="maxDrawdownInput" type="number" min="0" max="100" step="0.5">
-                            <b>%</b>
-                        </span>
-                    </label>
-                    <small id="settingsStatus">扫描后生效</small>
-                </div>
-
-                <div class="filter-rules">
-                    <div class="filter-rules-title">
-                        <span>候选筛选条件</span>
-                        <b>全部满足</b>
-                    </div>
-                    <ul>
-                        <li>24h 成交额 &gt; 100万 USDT</li>
-                        <li>上市时间 ≥ 120天</li>
-                        <li>排除稳定币、杠杆代币</li>
-                        <li>价格 &gt; MA7 &gt; MA20 &gt; MA99</li>
-                        <li>20日涨幅 &gt; <strong id="minChangeRule">5%</strong></li>
-                        <li>20日高点回撤 ≤ <strong id="maxDrawdownRule">12%</strong></li>
-                    </ul>
                 </div>
 
                 <label class="search-box">
@@ -116,11 +84,11 @@
                         <strong id="ma99Value">--</strong>
                     </div>
                     <div class="metric">
-                        <span>20日涨幅</span>
+                        <span id="changePeriodLabel">20日涨幅</span>
                         <strong id="change20dValue">--</strong>
                     </div>
                     <div class="metric">
-                        <span>20日高点回撤</span>
+                        <span id="drawdownPeriodLabel">20日高点回撤</span>
                         <strong id="drawdown20dValue">--</strong>
                     </div>
                     <div class="metric">
@@ -152,6 +120,130 @@
                     <span>仅供筛选展示，不参与自动下单</span>
                 </div>
             </section>
+
+            <aside class="settings-panel">
+                <div class="settings-head">
+                    <div>
+                        <span class="section-label">策略控制</span>
+                        <h3>参数与规则</h3>
+                    </div>
+                    <button class="save-settings-button" id="saveSettingsButton" type="button" disabled>
+                        保存参数
+                    </button>
+                </div>
+
+                <div class="settings-scroll">
+                    <section class="settings-module">
+                        <div class="module-title">
+                            <span>候选筛选</span>
+                            <b>决定哪些币进入候选列表</b>
+                        </div>
+                        <div class="hyperparameter">
+                            <label for="lookbackDaysInput">
+                                <span>涨幅/回撤统计周期</span>
+                                <span class="parameter-value">
+                                    <input id="lookbackDaysInput" type="number" min="2" max="364" step="1">
+                                    <b>日</b>
+                                </span>
+                            </label>
+                            <label for="minChange20dInput">
+                                <span>最小累计涨幅 X</span>
+                                <span class="parameter-value">
+                                    <input id="minChange20dInput" type="number" min="-100" max="10000" step="0.5">
+                                    <b>%</b>
+                                </span>
+                            </label>
+                            <label for="maxChange20dInput">
+                                <span>最大累计涨幅 X</span>
+                                <span class="parameter-value">
+                                    <input id="maxChange20dInput" type="number" min="-100" max="10000" step="0.5">
+                                    <b>%</b>
+                                </span>
+                            </label>
+                            <label for="maxDrawdownInput">
+                                <span>区间高点最大回撤 X</span>
+                                <span class="parameter-value">
+                                    <input id="maxDrawdownInput" type="number" min="0" max="100" step="0.5">
+                                    <b>%</b>
+                                </span>
+                            </label>
+                            <label for="use4hMaFilterInput">
+                                <span>均线筛选周期</span>
+                                <span class="filter-timeframe-toggle">
+                                    <b id="maFilterTimeframeLabel">日K</b>
+                                    <input id="use4hMaFilterInput" type="checkbox">
+                                    <i aria-hidden="true"></i>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="filter-rules">
+                            <div class="filter-rules-title">
+                                <span>候选筛选条件</span>
+                                <b>全部满足</b>
+                            </div>
+                            <ul>
+                                <li>24h 成交额 &gt; 100万 USDT</li>
+                                <li>上市时间 ≥ 120天</li>
+                                <li>排除稳定币、杠杆代币</li>
+                                <li><strong id="maFilterRule">日K</strong>：价格 &gt; MA7 &gt; MA20 &gt; MA99</li>
+                                <li><span class="lookback-days-text">20日</span>涨幅 &gt; <strong id="minChangeRule">5%</strong></li>
+                                <li><span class="lookback-days-text">20日</span>涨幅 &lt; <strong id="maxChangeRule">100%</strong></li>
+                                <li><span class="lookback-days-text">20日</span>高点回撤 ≤ <strong id="maxDrawdownRule">12%</strong></li>
+                            </ul>
+                        </div>
+                    </section>
+
+                    <section class="settings-module">
+                        <div class="module-title trade">
+                            <span>真实交易</span>
+                            <b>直接控制买入与卖出</b>
+                        </div>
+                        <div class="hyperparameter">
+                            <div class="readonly-parameter">
+                                <span>候选扫描频率</span>
+                                <b id="candidateScanInterval">--</b>
+                            </div>
+                            <label for="entryEnabledInput">
+                                <span>允许新买入</span>
+                                <span class="filter-timeframe-toggle">
+                                    <b id="entryEnabledLabel">允许</b>
+                                    <input id="entryEnabledInput" type="checkbox" checked>
+                                    <i aria-hidden="true"></i>
+                                </span>
+                            </label>
+                            <label for="ma7ExitThresholdInput">
+                                <span>日K MA7卖出阈值</span>
+                                <span class="parameter-value">
+                                    <input id="ma7ExitThresholdInput" type="number" min="0" max="100" step="0.5">
+                                    <b>%</b>
+                                </span>
+                            </label>
+                            <label for="hardStoplossInput">
+                                <span>硬止损</span>
+                                <span class="parameter-value">
+                                    <input id="hardStoplossInput" type="number" min="0.1" max="99" step="0.5">
+                                    <b>%</b>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="filter-rules">
+                            <div class="filter-rules-title">
+                                <span>买入与卖出条件</span>
+                                <b id="entryEnabledBadge">允许买入</b>
+                            </div>
+                            <ul>
+                                <li id="entryEnabledRule">进入候选列表后直接买入</li>
+                                <li>日K收盘价 &lt; MA7 × (1 - <strong id="ma7ExitThresholdRule">2%</strong>) 时卖出</li>
+                                <li>开仓价下方 <strong id="hardStoplossRule">6%</strong> 硬止损</li>
+                            </ul>
+                        </div>
+                    </section>
+
+                    <div class="settings-status">
+                        <small id="settingsStatus">调整后请点击“保存参数”确认</small>
+                    </div>
+                </div>
+            </aside>
         </main>
     </div>
 

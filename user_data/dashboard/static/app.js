@@ -1,12 +1,12 @@
 const COLORS = {
-    grid: "#1b2b36",
-    axis: "#718692",
-    up: "#39d98a",
-    down: "#ff5c72",
-    ma7: "#4cc9f0",
-    ma20: "#a78bfa",
-    ma99: "#f973a7",
-    crosshair: "#708895",
+    grid: "#e7ecf0",
+    axis: "#687783",
+    up: "#0a9b61",
+    down: "#dc3f56",
+    ma7: "#0788b5",
+    ma20: "#7c52c7",
+    ma99: "#d34278",
+    crosshair: "#8797a2",
 };
 
 const state = {
@@ -23,6 +23,7 @@ const state = {
     dragStartX: 0,
     dragStartEnd: 0,
     trackpadPanRemainder: 0,
+    settingsDirty: false,
 };
 
 const elements = {
@@ -30,14 +31,32 @@ const elements = {
     statusText: document.querySelector("#statusText"),
     updatedAt: document.querySelector("#updatedAt"),
     candidateCount: document.querySelector("#candidateCount"),
+    previewBadge: document.querySelector("#previewBadge"),
     candidateList: document.querySelector("#candidateList"),
     refreshButton: document.querySelector("#refreshButton"),
     refreshButtonLabel: document.querySelector("#refreshButton span"),
+    entryEnabledInput: document.querySelector("#entryEnabledInput"),
+    entryEnabledLabel: document.querySelector("#entryEnabledLabel"),
+    entryEnabledBadge: document.querySelector("#entryEnabledBadge"),
+    entryEnabledRule: document.querySelector("#entryEnabledRule"),
+    candidateScanInterval: document.querySelector("#candidateScanInterval"),
+    lookbackDaysInput: document.querySelector("#lookbackDaysInput"),
     minChange20dInput: document.querySelector("#minChange20dInput"),
+    maxChange20dInput: document.querySelector("#maxChange20dInput"),
     maxDrawdownInput: document.querySelector("#maxDrawdownInput"),
+    use4hMaFilterInput: document.querySelector("#use4hMaFilterInput"),
+    ma7ExitThresholdInput: document.querySelector("#ma7ExitThresholdInput"),
+    hardStoplossInput: document.querySelector("#hardStoplossInput"),
+    saveSettingsButton: document.querySelector("#saveSettingsButton"),
+    maFilterTimeframeLabel: document.querySelector("#maFilterTimeframeLabel"),
     settingsStatus: document.querySelector("#settingsStatus"),
     minChangeRule: document.querySelector("#minChangeRule"),
+    maxChangeRule: document.querySelector("#maxChangeRule"),
     maxDrawdownRule: document.querySelector("#maxDrawdownRule"),
+    maFilterRule: document.querySelector("#maFilterRule"),
+    ma7ExitThresholdRule: document.querySelector("#ma7ExitThresholdRule"),
+    hardStoplossRule: document.querySelector("#hardStoplossRule"),
+    lookbackDaysTexts: document.querySelectorAll(".lookback-days-text"),
     searchInput: document.querySelector("#searchInput"),
     pairName: document.querySelector("#pairName"),
     provisionalBadge: document.querySelector("#provisionalBadge"),
@@ -49,6 +68,8 @@ const elements = {
     ma99Value: document.querySelector("#ma99Value"),
     change20dValue: document.querySelector("#change20dValue"),
     drawdown20dValue: document.querySelector("#drawdown20dValue"),
+    changePeriodLabel: document.querySelector("#changePeriodLabel"),
+    drawdownPeriodLabel: document.querySelector("#drawdownPeriodLabel"),
     volume24h: document.querySelector("#volume24h"),
     chartCanvas: document.querySelector("#chartCanvas"),
     chartLoading: document.querySelector("#chartLoading"),
@@ -139,9 +160,13 @@ async function loadCandidates({
         const payload = await fetchJson("/api/candidates");
         state.candidates = payload.candidates || [];
         elements.candidateCount.textContent = String(state.candidates.length);
+        elements.previewBadge.hidden = !payload.is_preview;
         elements.updatedAt.textContent = formatUpdatedAt(payload.status?.updated_at);
         elements.updatedAt.title = payload.status?.updated_at || "";
-        setConnectionStatus("online", "数据正常");
+        setConnectionStatus(
+            "online",
+            payload.is_preview ? "预览结果，尚未用于交易" : "正式候选",
+        );
 
         const previousPair = preserveSelection ? state.selectedPair : null;
         const stillExists = state.candidates.some((item) => item.pair === previousPair);
@@ -172,51 +197,149 @@ async function loadCandidates({
 async function loadSettings() {
     try {
         const settings = await fetchJson("/api/settings");
+        const scanSeconds = Number(settings.candidate_scan_interval_seconds);
+        elements.candidateScanInterval.textContent = Number.isFinite(scanSeconds)
+            ? `每${formatDuration(scanSeconds)}`
+            : "--";
+        elements.entryEnabledInput.checked = settings.entry_enabled;
+        elements.lookbackDaysInput.value = settings.lookback_days;
         elements.minChange20dInput.value = settings.min_change_20d;
+        elements.maxChange20dInput.value = settings.max_change_20d;
         elements.maxDrawdownInput.value = settings.max_drawdown_20d;
+        elements.use4hMaFilterInput.checked = settings.use_4h_ma_filter;
+        elements.ma7ExitThresholdInput.value = settings.ma7_exit_threshold_pct;
+        elements.hardStoplossInput.value = settings.hard_stoploss_pct;
         updateFilterRuleValues();
+        state.settingsDirty = false;
+        elements.saveSettingsButton.disabled = true;
     } catch (error) {
         elements.settingsStatus.textContent = `读取失败：${error.message}`;
     }
 }
 
+function formatDuration(seconds) {
+    if (seconds % 3600 === 0) return `${seconds / 3600}小时`;
+    if (seconds % 60 === 0) return `${seconds / 60}分钟`;
+    return `${seconds}秒`;
+}
+
+function markSettingsDirty() {
+    state.settingsDirty = true;
+    elements.saveSettingsButton.disabled = false;
+    elements.settingsStatus.textContent = "参数尚未保存";
+}
+
+function currentSettingsPayload() {
+    return {
+        entry_enabled: elements.entryEnabledInput.checked,
+        lookback_days: Number(elements.lookbackDaysInput.value),
+        min_change_20d: Number(elements.minChange20dInput.value),
+        max_change_20d: Number(elements.maxChange20dInput.value),
+        max_drawdown_20d: Number(elements.maxDrawdownInput.value),
+        use_4h_ma_filter: elements.use4hMaFilterInput.checked,
+        ma7_exit_threshold_pct: Number(elements.ma7ExitThresholdInput.value),
+        hard_stoploss_pct: Number(elements.hardStoplossInput.value),
+    };
+}
+
 function updateFilterRuleValues() {
+    const entryEnabled = elements.entryEnabledInput.checked;
+    const lookbackDays = Number(elements.lookbackDaysInput.value);
     const minChange = Number(elements.minChange20dInput.value);
+    const maxChange = Number(elements.maxChange20dInput.value);
     const maxDrawdown = Number(elements.maxDrawdownInput.value);
+    const ma7ExitThreshold = Number(elements.ma7ExitThresholdInput.value);
+    const hardStoploss = Number(elements.hardStoplossInput.value);
+    const maTimeframe = elements.use4hMaFilterInput.checked ? "4h" : "日K";
+    const lookbackText = Number.isInteger(lookbackDays)
+        ? `${lookbackDays}日`
+        : "--日";
     elements.minChangeRule.textContent = Number.isFinite(minChange)
         ? `${minChange}%`
+        : "--";
+    elements.maxChangeRule.textContent = Number.isFinite(maxChange)
+        ? `${maxChange}%`
         : "--";
     elements.maxDrawdownRule.textContent = Number.isFinite(maxDrawdown)
         ? `${maxDrawdown}%`
         : "--";
+    elements.maFilterTimeframeLabel.textContent = maTimeframe;
+    elements.maFilterRule.textContent = maTimeframe;
+    elements.lookbackDaysTexts.forEach((element) => {
+        element.textContent = lookbackText;
+    });
+    elements.changePeriodLabel.textContent = `${lookbackText}涨幅`;
+    elements.drawdownPeriodLabel.textContent = `${lookbackText}高点回撤`;
+    elements.ma7ExitThresholdRule.textContent = Number.isFinite(ma7ExitThreshold)
+        ? `${ma7ExitThreshold}%`
+        : "--";
+    elements.hardStoplossRule.textContent = Number.isFinite(hardStoploss)
+        ? `${hardStoploss}%`
+        : "--";
+    elements.entryEnabledLabel.textContent = entryEnabled ? "允许" : "禁止";
+    elements.entryEnabledBadge.textContent = entryEnabled ? "允许买入" : "仅允许卖出";
+    elements.entryEnabledRule.textContent = entryEnabled
+        ? "进入候选列表后直接买入"
+        : "禁止所有新买入，现有持仓继续执行卖出";
 }
 
 async function saveSettings() {
+    const lookbackDays = Number(elements.lookbackDaysInput.value);
     const minChange20d = Number(elements.minChange20dInput.value);
+    const maxChange20d = Number(elements.maxChange20dInput.value);
     const maxDrawdown20d = Number(elements.maxDrawdownInput.value);
+    const ma7ExitThreshold = Number(elements.ma7ExitThresholdInput.value);
+    const hardStoploss = Number(elements.hardStoplossInput.value);
+    if (!Number.isInteger(lookbackDays) || lookbackDays < 2 || lookbackDays > 364) {
+        elements.settingsStatus.textContent = "统计周期请输入 2～364 的整数";
+        return;
+    }
     if (!Number.isFinite(minChange20d) || minChange20d < -100 || minChange20d > 10000) {
         elements.settingsStatus.textContent = "涨幅请输入 -100～10000";
+        return;
+    }
+    if (!Number.isFinite(maxChange20d) || maxChange20d < -100 || maxChange20d > 10000) {
+        elements.settingsStatus.textContent = "最大涨幅请输入 -100～10000";
+        return;
+    }
+    if (maxChange20d <= minChange20d) {
+        elements.settingsStatus.textContent = "最大涨幅必须大于最小涨幅";
         return;
     }
     if (!Number.isFinite(maxDrawdown20d) || maxDrawdown20d < 0 || maxDrawdown20d > 100) {
         elements.settingsStatus.textContent = "回撤请输入 0～100";
         return;
     }
+    if (
+        !Number.isFinite(ma7ExitThreshold)
+        || ma7ExitThreshold < 0
+        || ma7ExitThreshold > 100
+    ) {
+        elements.settingsStatus.textContent = "MA7卖出阈值请输入 0～100";
+        return;
+    }
+    if (!Number.isFinite(hardStoploss) || hardStoploss < 0.1 || hardStoploss > 99) {
+        elements.settingsStatus.textContent = "硬止损请输入 0.1～99";
+        return;
+    }
 
     elements.settingsStatus.textContent = "保存中...";
+    elements.saveSettingsButton.disabled = true;
     try {
-        await fetchJson("/api/settings", {
+        const result = await fetchJson("/api/settings", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                min_change_20d: minChange20d,
-                max_drawdown_20d: maxDrawdown20d,
-            }),
+            body: JSON.stringify(currentSettingsPayload()),
         });
         updateFilterRuleValues();
-        elements.settingsStatus.textContent = "已保存，扫描后生效";
+        state.settingsDirty = false;
+        elements.settingsStatus.textContent = result.preview_promoted
+            ? "参数已保存，预览候选已正式用于交易"
+            : "参数已保存；筛选条件将在扫描后生效";
+        await loadCandidates({ reloadChart: true });
     } catch (error) {
         elements.settingsStatus.textContent = `保存失败：${error.message}`;
+        elements.saveSettingsButton.disabled = false;
     }
 }
 
@@ -504,8 +627,8 @@ function drawVolumes(geometry, candles, xForIndex, step) {
     candles.forEach((candle, index) => {
         const height = (candle.volume / maxVolume) * (geometry.volumeHeight - 8);
         context.fillStyle = candle.close >= candle.open
-            ? "rgb(57 217 138 / 28%)"
-            : "rgb(255 92 114 / 25%)";
+            ? "rgb(10 155 97 / 24%)"
+            : "rgb(220 63 86 / 22%)";
         context.fillRect(
             xForIndex(index) - width / 2,
             geometry.volumeBottom - height,
@@ -764,20 +887,69 @@ function stopChartDrag() {
 }
 
 elements.searchInput.addEventListener("input", filterCandidates);
-elements.minChange20dInput.addEventListener("change", saveSettings);
-elements.minChange20dInput.addEventListener("input", updateFilterRuleValues);
+elements.entryEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.lookbackDaysInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.lookbackDaysInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.lookbackDaysInput.blur();
+    }
+});
+elements.minChange20dInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
 elements.minChange20dInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
         elements.minChange20dInput.blur();
     }
 });
-elements.maxDrawdownInput.addEventListener("change", saveSettings);
-elements.maxDrawdownInput.addEventListener("input", updateFilterRuleValues);
+elements.maxChange20dInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.maxChange20dInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.maxChange20dInput.blur();
+    }
+});
+elements.maxDrawdownInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
 elements.maxDrawdownInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
         elements.maxDrawdownInput.blur();
     }
 });
+elements.use4hMaFilterInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.ma7ExitThresholdInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.ma7ExitThresholdInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.ma7ExitThresholdInput.blur();
+    }
+});
+elements.hardStoplossInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.hardStoplossInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.hardStoplossInput.blur();
+    }
+});
+elements.saveSettingsButton.addEventListener("click", saveSettings);
 elements.refreshButton.addEventListener("click", startManualScan);
 elements.refreshChartButton.addEventListener("click", async () => {
     if (elements.refreshChartButton.disabled) return;
@@ -839,21 +1011,30 @@ async function startManualScan() {
     if (elements.refreshButton.disabled) return;
 
     elements.refreshButton.disabled = true;
+    elements.saveSettingsButton.disabled = true;
     elements.refreshButton.classList.add("loading");
     elements.refreshButtonLabel.textContent = "扫描中";
-    setConnectionStatus("", "正在扫描");
+    setConnectionStatus("", state.settingsDirty ? "正在预览草稿参数" : "正在扫描");
 
     try {
-        let status = await fetchJson("/api/scan", { method: "POST" });
+        const request = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        };
+        if (state.settingsDirty) {
+            request.body = JSON.stringify(currentSettingsPayload());
+        }
+        let status = await fetchJson("/api/scan", request);
         while (status.running) {
             await new Promise((resolve) => window.setTimeout(resolve, 1000));
             status = await fetchJson("/api/scan/status");
         }
 
         if (status.return_code === 0) {
-            setConnectionStatus("online", "扫描完成");
-            elements.settingsStatus.textContent = "已按当前 X 筛选";
-            await loadCandidates();
+            elements.settingsStatus.textContent = status.is_preview
+                ? "预览完成；满意后点击“保存参数”用于交易"
+                : "正式候选已更新";
+            await loadCandidates({ reloadChart: true });
         } else {
             setConnectionStatus("error", status.message || "扫描失败");
         }
@@ -861,6 +1042,7 @@ async function startManualScan() {
         setConnectionStatus("error", `扫描失败：${error.message}`);
     } finally {
         elements.refreshButton.disabled = false;
+        elements.saveSettingsButton.disabled = !state.settingsDirty;
         elements.refreshButton.classList.remove("loading");
         elements.refreshButtonLabel.textContent = "立即扫描";
     }

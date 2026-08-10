@@ -1,0 +1,22 @@
+[Unit]
+Description=Freqtrade Binance spot dry-run bot
+After=network-online.target freqtrade-scanner.service
+Wants=network-online.target freqtrade-scanner.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/freqtrade
+EnvironmentFile=-/etc/freqtrade.env
+ExecStart=/opt/freqtrade/.venv/bin/freqtrade trade --config user_data/config_scan.json
+Restart=always
+RestartSec=10
+Nice=10
+CPUWeight=30
+CPUQuota=65%
+MemoryHigh=500M
+MemoryMax=700M
+OOMScoreAdjust=200
+
+[Install]
+WantedBy=multi-user.target

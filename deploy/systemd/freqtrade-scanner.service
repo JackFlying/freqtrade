@@ -1,0 +1,21 @@
+[Unit]
+Description=Freqtrade daily trend candidate scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/freqtrade
+ExecStart=/opt/freqtrade/.venv/bin/python -u user_data/scripts/screen_daily_trend.py --loop
+Restart=always
+RestartSec=10
+Nice=15
+CPUWeight=10
+CPUQuota=35%
+MemoryHigh=550M
+MemoryMax=700M
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target

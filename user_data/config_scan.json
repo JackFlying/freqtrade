@@ -8,14 +8,11 @@
     // 使用的策略类名称，对应 SpotScanStrategy.py 中的 SpotScanStrategy。
     "strategy": "SpotScanStrategy",
 
-    // 自定义策略文件所在目录。
-    "strategy_path": "user_data/strategies",
-
-    // K 线周期：每 15 分钟产生一根 K 线并计算一次新信号。
+    // K 线周期：候选列表更新后，最迟在下一根 15 分钟 K 线检查直接买入信号。
     "timeframe": "15m",
 
     // 最大同时持有的交易数：当前最多允许 4 笔未结束的交易。
-    "max_open_trades": 4,
+    "max_open_trades": 5,
 
     // 仓位计价货币：使用 USDT 买入其他币种。
     "stake_currency": "USDT",
@@ -25,7 +22,7 @@
 
     // 允许用于交易的余额比例：最多使用总余额的 99%，预留 1% 作为缓冲。
     // 实际资金占用仍会受到 stake_amount 和 max_open_trades 限制。
-    "tradable_balance_ratio": 0.99,
+    "tradable_balance_ratio": 1.00,
 
     // 模拟交易开关：true 表示不向交易所提交真实订单。
     "dry_run": true,
@@ -59,8 +56,8 @@
 
     // 入场订单的价格计算方式。
     "entry_pricing": {
-        // 使用交易方向同侧价格：买入时采用买方一侧价格。
-        "price_side": "same",
+        // 市价买入使用卖方一侧报价，满足 Freqtrade 的市价单校验要求。
+        "price_side": "other",
 
         // 使用订单簿报价，而不是仅使用最新成交价。
         "use_order_book": true,
@@ -83,8 +80,8 @@
 
     // 出场订单的价格计算方式。
     "exit_pricing": {
-        // 使用交易方向同侧价格：卖出时采用卖方一侧价格。
-        "price_side": "same",
+        // 市价卖出使用交易方向对手侧报价，满足 Freqtrade 的市价单校验要求。
+        "price_side": "other",
 
         // 使用订单簿报价，而不是仅使用最新成交价。
         "use_order_book": true,
@@ -103,6 +100,9 @@
 
         // Binance API Secret；模拟交易读取公开行情时可以留空。
         "secret": "",
+
+        // 单核服务器使用 REST 拉取 K 线，避免大量 WebSocket 长连接争抢资源。
+        "enable_ws": false,
 
         // CCXT 同步客户端配置。
         "ccxt_config": {
@@ -186,8 +186,12 @@
     // 交易对列表生成方式。
     "pairlists": [
         {
-            // 使用配置中的静态白名单，并支持上方的正则表达式。
-            "method": "StaticPairList"
+            // 先按 24h 成交额建立轻量交易池，最终买入仍由独立候选 CSV 决定。
+            "method": "VolumePairList",
+            "number_assets": 500,
+            "sort_key": "quoteVolume",
+            "min_value": 1000000,
+            "refresh_period": 3600
         }
     ],
 
@@ -236,8 +240,8 @@
         "password": "freqtrade-local"
     },
 
-    // 程序启动后的机器人状态：stopped 表示启动服务但不自动开始交易。
-    "initial_state": "stopped",
+    // 程序启动后的机器人状态：running 表示重启后自动恢复交易和持仓管理。
+    "initial_state": "running",
 
     // 是否允许通过 API 或 FreqUI 手动强制入场；false 用于防止误操作。
     "force_entry_enable": false,
@@ -273,8 +277,8 @@
             // 至少需要 120 根已收盘日线，用于排除上市不足 120 天的币。
             "minimum_listing_days": 120,
 
-            // 成交额交易池每 24 小时重新联网筛选一次。
-            "universe_refresh_seconds": 86400,
+            // 成交额交易池每 1 小时扫描全量市场并重新筛选一次。
+            "universe_refresh_seconds": 3600,
 
             // 未收盘日线和 MA 每 15 分钟更新一次。
             "update_interval_seconds": 900,

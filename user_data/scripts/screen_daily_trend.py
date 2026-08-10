@@ -32,6 +32,7 @@ OUTPUT_COLUMNS = [
     "ma_7",
     "ma_20",
     "ma_99",
+    "four_hour_alignment",
     "change_20d",
     "drawdown_20d",
     "quote_volume_24h",
@@ -63,6 +64,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run continuously using scanner.daily_trend.update_interval_seconds.",
     )
+    parser.add_argument(
+        "--settings-file",
+        type=Path,
+        help="Use runtime settings from this file instead of the live settings file.",
+    )
+    parser.add_argument(
+        "--output-directory",
+        type=Path,
+        help="Write scan results to this directory instead of the configured directory.",
+    )
     return parser.parse_args()
 
 
@@ -85,11 +96,24 @@ def atomic_write_csv(path: Path, dataframe: pd.DataFrame) -> None:
     temp_path.replace(path)
 
 
-def load_runtime_settings(scanner_config: dict[str, Any]) -> dict[str, float]:
-    settings_path = ROOT_DIR / scanner_config["cache_directory"] / "runtime_settings.json"
+def load_runtime_settings(
+    scanner_config: dict[str, Any],
+    settings_file: Path | None = None,
+) -> dict[str, float | bool | int]:
+    settings_path = (
+        settings_file.resolve()
+        if settings_file
+        else ROOT_DIR / scanner_config["cache_directory"] / "runtime_settings.json"
+    )
     defaults = {
         "min_change_20d": 5.0,
+        "max_change_20d": 100.0,
         "max_drawdown_20d": 12.0,
+        "lookback_days": 20,
+        "use_4h_ma_filter": False,
+        "ma7_exit_threshold_pct": 2.0,
+        "hard_stoploss_pct": 6.0,
+        "entry_enabled": True,
     }
     if not settings_path.exists():
         return defaults
@@ -99,9 +123,36 @@ def load_runtime_settings(scanner_config: dict[str, Any]) -> dict[str, float]:
             "min_change_20d": float(
                 payload.get("min_change_20d", defaults["min_change_20d"])
             ),
+            "max_change_20d": float(
+                payload.get("max_change_20d", defaults["max_change_20d"])
+            ),
             "max_drawdown_20d": float(
                 payload.get("max_drawdown_20d", defaults["max_drawdown_20d"])
-            )
+            ),
+            "lookback_days": int(
+                payload.get("lookback_days", defaults["lookback_days"])
+            ),
+            "use_4h_ma_filter": bool(
+                payload.get(
+                    "use_4h_ma_filter",
+                    defaults["use_4h_ma_filter"],
+                )
+            ),
+            "ma7_exit_threshold_pct": float(
+                payload.get(
+                    "ma7_exit_threshold_pct",
+                    defaults["ma7_exit_threshold_pct"],
+                )
+            ),
+            "hard_stoploss_pct": float(
+                payload.get(
+                    "hard_stoploss_pct",
+                    defaults["hard_stoploss_pct"],
+                )
+            ),
+            "entry_enabled": bool(
+                payload.get("entry_enabled", defaults["entry_enabled"])
+            ),
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return defaults
@@ -211,6 +262,7 @@ async def async_call_with_retry(call: Any, *args: Any, **kwargs: Any) -> Any:
 async def fetch_ohlcv_with_retry(
     exchange: Any,
     pair: str,
+    timeframe: str,
     since: int | None,
     limit: int,
     semaphore: asyncio.Semaphore,
@@ -220,7 +272,7 @@ async def fetch_ohlcv_with_retry(
             async with semaphore:
                 return await exchange.fetch_ohlcv(
                     pair,
-                    timeframe="1d",
+                    timeframe=timeframe,
                     since=since,
                     limit=limit,
                 )
@@ -229,6 +281,36 @@ async def fetch_ohlcv_with_retry(
                 raise
             await asyncio.sleep(2**attempt)
     return []
+
+
+async def has_four_hour_ma_alignment(
+    exchange: Any,
+    pair: str,
+    semaphore: asyncio.Semaphore,
+) -> bool:
+    rows = await fetch_ohlcv_with_retry(
+        exchange,
+        pair,
+        "4h",
+        None,
+        120,
+        semaphore,
+    )
+    dataframe = pd.DataFrame(rows, columns=OHLCV_COLUMNS)
+    if len(dataframe) < 99:
+        return False
+
+    for period in (7, 20, 99):
+        dataframe[f"ma_{period}"] = dataframe["close"].rolling(
+            window=period,
+            min_periods=period,
+        ).mean()
+    latest = dataframe.iloc[-1]
+    return bool(
+        latest["close"] > latest["ma_7"]
+        and latest["ma_7"] > latest["ma_20"]
+        and latest["ma_20"] > latest["ma_99"]
+    )
 
 
 async def update_pair(
@@ -255,6 +337,7 @@ async def update_pair(
         rows = await fetch_ohlcv_with_retry(
             exchange,
             pair,
+            "1d",
             since,
             request_limit,
             semaphore,
@@ -283,11 +366,17 @@ async def update_pair(
             ).mean()
 
         latest = dataframe.iloc[-1]
-        change_20d = (latest["close"] / dataframe["close"].iloc[-21] - 1) * 100
-        highest_20d = dataframe["high"].tail(20).max()
+        lookback_days = int(scanner_config["lookback_days"])
+        if len(dataframe) < lookback_days + 1:
+            return None, f"{pair}: insufficient data for {lookback_days}-day lookback"
+        change_20d = (
+            latest["close"] / dataframe["close"].iloc[-lookback_days - 1] - 1
+        ) * 100
+        highest_20d = dataframe["high"].tail(lookback_days).max()
         drawdown_20d = (highest_20d - latest["close"]) / highest_20d * 100
         max_drawdown_20d = float(scanner_config["max_drawdown_20d"])
         min_change_20d = float(scanner_config["min_change_20d"])
+        max_change_20d = float(scanner_config["max_change_20d"])
         required_values = [
             latest["close"],
             latest["ma_7"],
@@ -299,13 +388,28 @@ async def update_pair(
         if any(pd.isna(value) for value in required_values):
             return None, f"{pair}: insufficient data for MA99"
 
-        trend_candidate = bool(
+        common_candidate = bool(
+            change_20d > min_change_20d
+            and change_20d < max_change_20d
+            and drawdown_20d <= max_drawdown_20d
+        )
+        daily_alignment = bool(
             latest["close"] > latest["ma_7"]
             and latest["ma_7"] > latest["ma_20"]
             and latest["ma_20"] > latest["ma_99"]
-            and change_20d > min_change_20d
-            and drawdown_20d <= max_drawdown_20d
         )
+        use_four_hour_filter = bool(scanner_config["use_4h_ma_filter"])
+        four_hour_alignment = None
+        if common_candidate and use_four_hour_filter:
+            four_hour_alignment = await has_four_hour_ma_alignment(
+                exchange,
+                pair,
+                semaphore,
+            )
+        selected_alignment = (
+            four_hour_alignment if use_four_hour_filter else daily_alignment
+        )
+        trend_candidate = common_candidate and selected_alignment is True
         candle_time = pd.Timestamp(latest["date"])
         return (
             {
@@ -319,6 +423,7 @@ async def update_pair(
                 "ma_7": round(float(latest["ma_7"]), 8),
                 "ma_20": round(float(latest["ma_20"]), 8),
                 "ma_99": round(float(latest["ma_99"]), 8),
+                "four_hour_alignment": four_hour_alignment,
                 "change_20d": round(float(change_20d), 2),
                 "drawdown_20d": round(float(drawdown_20d), 2),
                 "quote_volume_24h": round(
@@ -344,7 +449,10 @@ def write_outputs(
     output_directory: Path,
     universe_size: int,
     min_change_20d: float,
+    max_change_20d: float,
     max_drawdown_20d: float,
+    lookback_days: int,
+    use_4h_ma_filter: bool,
 ) -> None:
     results.sort(
         key=lambda item: (
@@ -390,7 +498,10 @@ def write_outputs(
             "uses_provisional_daily_candle": True,
             "moving_average_type": "SMA",
             "min_change_20d": min_change_20d,
+            "max_change_20d": max_change_20d,
             "max_drawdown_20d": max_drawdown_20d,
+            "lookback_days": lookback_days,
+            "ma_filter_timeframe": "4h" if use_4h_ma_filter else "1d",
         },
     )
 
@@ -398,10 +509,14 @@ def write_outputs(
 async def run_screen(args: argparse.Namespace) -> int:
     config = load_config_file(str(args.config.resolve()))
     scanner_config = config["scanner"]["daily_trend"]
-    runtime_settings = load_runtime_settings(scanner_config)
+    runtime_settings = load_runtime_settings(scanner_config, args.settings_file)
     scanner_config = {**scanner_config, **runtime_settings}
     cache_directory = ROOT_DIR / scanner_config["cache_directory"]
-    output_directory = ROOT_DIR / scanner_config["output_directory"]
+    output_directory = (
+        args.output_directory.resolve()
+        if args.output_directory
+        else ROOT_DIR / scanner_config["output_directory"]
+    )
     cache_directory.mkdir(parents=True, exist_ok=True)
     output_directory.mkdir(parents=True, exist_ok=True)
     universe_path = cache_directory / "universe.json"
@@ -472,7 +587,10 @@ async def run_screen(args: argparse.Namespace) -> int:
             output_directory,
             len(universe),
             float(scanner_config["min_change_20d"]),
+            float(scanner_config["max_change_20d"]),
             float(scanner_config["max_drawdown_20d"]),
+            int(scanner_config["lookback_days"]),
+            bool(scanner_config["use_4h_ma_filter"]),
         )
         candidate_count = sum(result["trend_candidate"] for result in results)
         print(

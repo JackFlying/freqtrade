@@ -1,0 +1,21 @@
+[Unit]
+Description=Freqtrade strategy dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/freqtrade
+ExecStart=/opt/freqtrade/.venv/bin/uvicorn app:app --app-dir user_data/dashboard --host 127.0.0.1 --port 8083
+Restart=always
+RestartSec=10
+Nice=15
+CPUWeight=10
+CPUQuota=15%
+MemoryHigh=150M
+MemoryMax=250M
+OOMScoreAdjust=400
+
+[Install]
+WantedBy=multi-user.target
