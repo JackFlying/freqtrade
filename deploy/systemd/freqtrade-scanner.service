@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/freqtrade
+EnvironmentFile=-/etc/freqtrade.env
 ExecStart=/opt/freqtrade/.venv/bin/python -u user_data/scripts/screen_daily_trend.py --loop
 Restart=always
 RestartSec=10

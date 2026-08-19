@@ -11,14 +11,20 @@
     // K 线周期：候选列表更新后，最迟在下一根 15 分钟 K 线检查直接买入信号。
     "timeframe": "15m",
 
-    // 最大同时持有的交易数：当前最多允许 4 笔未结束的交易。
-    "max_open_trades": 5,
+    // 最大同时持有的交易数：当前最多允许 1 笔未结束的交易。
+    "max_open_trades": 1,
 
     // 仓位计价货币：使用 USDT 买入其他币种。
     "stake_currency": "USDT",
 
-    // 单笔交易投入金额：每次开仓使用 200 USDT。
-    "stake_amount": 200,
+    // 单笔交易投入金额：unlimited 表示使用当前可用余额。
+    "stake_amount": "unlimited",
+
+    // 当剩余余额不足一个完整 stake_amount 时，允许最后一笔使用剩余余额开仓。
+    "amend_last_stake_amount": true,
+
+    // 最后一笔开仓的最低比例：剩余金额至少达到目标仓位的 10% 才允许开仓。
+    "last_stake_amount_min_ratio": 0.1,
 
     // 允许用于交易的余额比例：最多使用总余额的 99%，预留 1% 作为缓冲。
     // 实际资金占用仍会受到 stake_amount 和 max_open_trades 限制。
@@ -177,6 +183,7 @@
         "pair_blacklist": [
             // 排除名称以 UP、DOWN、BULL、BEAR 结尾的杠杆代币。
             ".*(UP|DOWN|BULL|BEAR)/USDT",
+            ".*([2-5]L|[2-5]S)/USDT",
 
             // 排除稳定币及部分法币与 USDT 之间的交易对。
             "(USDC|FDUSD|TUSD|USDP|DAI|EUR|TRY|BRL)/USDT"
@@ -197,8 +204,8 @@
 
     // Telegram 通知和机器人控制设置。
     "telegram": {
-        // 是否启用 Telegram；false 表示关闭。
-        "enabled": false,
+        // 是否启用 Telegram；true 表示开启（token/chat_id 由服务器环境变量注入）。
+        "enabled": true,
 
         // Telegram Bot Token；未启用时留空。
         "token": "",
@@ -274,8 +281,8 @@
             // 进入观察范围所需的最低 24 小时 USDT 成交额。
             "minimum_quote_volume": 1000000,
 
-            // 至少需要 120 根已收盘日线，用于排除上市不足 120 天的币。
-            "minimum_listing_days": 120,
+            // 至少需要 60 根已收盘日线；不足 99 根时使用临时 MA99。
+            "minimum_listing_days": 60,
 
             // 成交额交易池每 1 小时扫描全量市场并重新筛选一次。
             "universe_refresh_seconds": 3600,
@@ -313,7 +320,20 @@
                 "USD1",
                 "USTC",
                 "XUSD"
-            ]
+            ],
+
+            // 交易所风险标记文件；记录下架预警、Monitoring Tag 等人工确认事件。
+            "risk_flags_file": "user_data/scan_data/daily_trend/risk_flags.json",
+
+            // 只使用最近 30 天内的风险标记，过期标记自动失效。
+            "risk_flag_lookback_days": 30,
+
+            // 成交额异常过滤：高成交额、反复极端放量且价格波动极低时排除。
+            "wash_trading_filter_enabled": true,
+            "wash_trading_volume_spike_ratio": 12.0,
+            "wash_trading_min_suspicious_days": 3,
+            "wash_trading_max_range_pct": 0.6,
+            "wash_trading_min_daily_quote_volume": 10000000
         }
     }
 }

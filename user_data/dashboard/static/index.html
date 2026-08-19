@@ -14,6 +14,10 @@
                 <p class="eyebrow">BINANCE SPOT · USDT</p>
                 <h1>趋势策略控制台</h1>
             </div>
+            <nav class="view-tabs" id="viewTabs" aria-label="控制台视图">
+                <button type="button" class="active" data-view="live">实时</button>
+                <button type="button" data-view="backtest">回测</button>
+            </nav>
             <div class="topbar-status">
                 <span class="status-dot" id="statusDot"></span>
                 <span id="statusText">正在连接</span>
@@ -23,7 +27,7 @@
             </div>
         </header>
 
-        <main class="workspace">
+        <main class="workspace" id="liveWorkspace">
             <aside class="sidebar">
                 <div class="sidebar-head">
                     <div>
@@ -40,6 +44,17 @@
                 <label class="search-box">
                     <span>⌕</span>
                     <input id="searchInput" type="search" placeholder="搜索交易对" autocomplete="off">
+                </label>
+
+                <label class="sort-box">
+                    <span>排序</span>
+                    <select id="sortSelect">
+                        <option value="default">默认（成交额）</option>
+                        <option value="change_desc">最大累计涨幅（高→低）</option>
+                        <option value="change_asc">最大累计涨幅（低→高）</option>
+                        <option value="drawdown_desc">区间高点最大回撤（大→小）</option>
+                        <option value="drawdown_asc">区间高点最大回撤（小→大）</option>
+                    </select>
                 </label>
 
                 <div class="candidate-list" id="candidateList">
@@ -124,7 +139,6 @@
             <aside class="settings-panel">
                 <div class="settings-head">
                     <div>
-                        <span class="section-label">策略控制</span>
                         <h3>参数与规则</h3>
                     </div>
                     <button class="save-settings-button" id="saveSettingsButton" type="button" disabled>
@@ -133,117 +147,485 @@
                 </div>
 
                 <div class="settings-scroll">
-                    <section class="settings-module">
-                        <div class="module-title">
-                            <span>候选筛选</span>
-                            <b>决定哪些币进入候选列表</b>
-                        </div>
-                        <div class="hyperparameter">
-                            <label for="lookbackDaysInput">
-                                <span>涨幅/回撤统计周期</span>
-                                <span class="parameter-value">
-                                    <input id="lookbackDaysInput" type="number" min="2" max="364" step="1">
-                                    <b>日</b>
-                                </span>
-                            </label>
-                            <label for="minChange20dInput">
-                                <span>最小累计涨幅 X</span>
-                                <span class="parameter-value">
-                                    <input id="minChange20dInput" type="number" min="-100" max="10000" step="0.5">
-                                    <b>%</b>
-                                </span>
-                            </label>
-                            <label for="maxChange20dInput">
-                                <span>最大累计涨幅 X</span>
-                                <span class="parameter-value">
-                                    <input id="maxChange20dInput" type="number" min="-100" max="10000" step="0.5">
-                                    <b>%</b>
-                                </span>
-                            </label>
-                            <label for="maxDrawdownInput">
-                                <span>区间高点最大回撤 X</span>
-                                <span class="parameter-value">
-                                    <input id="maxDrawdownInput" type="number" min="0" max="100" step="0.5">
-                                    <b>%</b>
-                                </span>
-                            </label>
-                            <label for="use4hMaFilterInput">
-                                <span>均线筛选周期</span>
-                                <span class="filter-timeframe-toggle">
-                                    <b id="maFilterTimeframeLabel">日K</b>
-                                    <input id="use4hMaFilterInput" type="checkbox">
-                                    <i aria-hidden="true"></i>
-                                </span>
-                            </label>
-                        </div>
-                        <div class="filter-rules">
-                            <div class="filter-rules-title">
-                                <span>候选筛选条件</span>
-                                <b>全部满足</b>
-                            </div>
-                            <ul>
-                                <li>24h 成交额 &gt; 100万 USDT</li>
-                                <li>上市时间 ≥ 120天</li>
-                                <li>排除稳定币、杠杆代币</li>
-                                <li><strong id="maFilterRule">日K</strong>：价格 &gt; MA7 &gt; MA20 &gt; MA99</li>
-                                <li><span class="lookback-days-text">20日</span>涨幅 &gt; <strong id="minChangeRule">5%</strong></li>
-                                <li><span class="lookback-days-text">20日</span>涨幅 &lt; <strong id="maxChangeRule">100%</strong></li>
-                                <li><span class="lookback-days-text">20日</span>高点回撤 ≤ <strong id="maxDrawdownRule">12%</strong></li>
-                            </ul>
-                        </div>
-                    </section>
+                    <div class="settings-primary">
+                        <label class="parameter-row parameter-row-primary" for="strategyTimeframeInput">
+                            <span><b>策略周期</b></span>
+                            <select id="strategyTimeframeInput" class="parameter-select">
+                                <option value="1d">日K策略</option>
+                                <option value="4h">4hK线策略</option>
+                            </select>
+                        </label>
+                    </div>
 
-                    <section class="settings-module">
-                        <div class="module-title trade">
-                            <span>真实交易</span>
-                            <b>直接控制买入与卖出</b>
-                        </div>
-                        <div class="hyperparameter">
-                            <div class="readonly-parameter">
-                                <span>候选扫描频率</span>
-                                <b id="candidateScanInterval">--</b>
+                    <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="参数分类">
+                        <button class="active" type="button" role="tab" aria-selected="true" aria-controls="settingsTabFilter" data-settings-tab="filter">筛选</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="settingsTabEntry" data-settings-tab="entry">入场</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="settingsTabExit" data-settings-tab="exit">退出</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="settingsTabExecution" data-settings-tab="execution">执行</button>
+                    </div>
+
+                    <div class="settings-tab-panels">
+                        <section class="settings-tab-panel active" id="settingsTabFilter" role="tabpanel" data-settings-panel="filter">
+                            <div class="parameter-group">
+                                <div class="parameter-group-title">
+                                    <strong>统计与涨幅</strong>
+                                    <span>核心</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="lookbackDaysInput">
+                                        <span>涨幅与回撤周期</span>
+                                        <span class="parameter-value">
+                                            <input id="lookbackDaysInput" type="number" min="2" max="364" step="1">
+                                            <b>日</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="minChange20dInput">
+                                        <span>累计涨幅下限</span>
+                                        <span class="parameter-value">
+                                            <input id="minChange20dInput" type="number" min="-100" max="10000" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="maxChange20dInput">
+                                        <span>累计涨幅上限</span>
+                                        <span class="parameter-value">
+                                            <input id="maxChange20dInput" type="number" min="-100" max="10000" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="maxDrawdownToGainRatioInput">
+                                        <span>回撤 / 涨幅上限</span>
+                                        <span class="parameter-value">
+                                            <input id="maxDrawdownToGainRatioInput" type="number" min="0" max="100" step="1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
-                            <label for="entryEnabledInput">
-                                <span>允许新买入</span>
-                                <span class="filter-timeframe-toggle">
-                                    <b id="entryEnabledLabel">允许</b>
-                                    <input id="entryEnabledInput" type="checkbox" checked>
+                            <div class="parameter-group">
+                                <div class="parameter-group-title">
+                                    <strong>趋势过滤</strong>
+                                    <span>可选</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="useMa99FilterInput">
+                                        <span>
+                                            追加 MA99 约束
+                                            <small>不足99天使用临时 MA99</small>
+                                        </span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="ma99FilterLabel">关闭</b>
+                                            <input id="useMa99FilterInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="settings-tab-panel" id="settingsTabEntry" role="tabpanel" data-settings-panel="entry" hidden>
+                            <div class="parameter-group">
+                                <div class="parameter-group-title">
+                                    <strong>MA7 回踩确认</strong>
+                                    <span>入场信号</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="ma7ReclaimEnabledInput">
+                                        <span>回踩后重新站上 MA7</span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="ma7ReclaimEnabledLabel">开启</b>
+                                            <input id="ma7ReclaimEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="ma7ReclaimToleranceInput">
+                                        <span>MA7 回踩容差</span>
+                                        <span class="parameter-value">
+                                            <input id="ma7ReclaimToleranceInput" type="number" min="0.1" max="5" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="ma7ReclaimLookbackInput">
+                                        <span>回捞窗口</span>
+                                        <span class="parameter-value">
+                                            <input id="ma7ReclaimLookbackInput" type="number" min="1" max="5" step="1">
+                                            <b id="ma7ReclaimLookbackUnit">日</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="settings-tab-panel" id="settingsTabExit" role="tabpanel" data-settings-panel="exit" hidden>
+                            <div class="parameter-group">
+                                <div class="parameter-group-title">
+                                    <strong>基础保护</strong>
+                                    <span>高优先级</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="hardStoplossInput">
+                                        <span>硬止损</span>
+                                        <span class="parameter-value">
+                                            <input id="hardStoplossInput" type="number" min="0.1" max="99" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="ma7ExitThresholdInput">
+                                        <span><b id="ma7ExitThresholdTimeframe">日K</b> MA7卖出阈值</span>
+                                        <span class="parameter-value">
+                                            <input id="ma7ExitThresholdInput" type="number" min="0" max="100" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="noProgressExitEnabledInput">
+                                        <span>无进展止损</span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="noProgressExitEnabledLabel">关闭</b>
+                                            <input id="noProgressExitEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <details class="parameter-details" id="drawdownProtectionDetails">
+                                <summary>
+                                    <span>
+                                        <strong>回撤止损</strong>
+                                        <small>静态 / 动态锁盈</small>
+                                    </span>
                                     <i aria-hidden="true"></i>
-                                </span>
-                            </label>
-                            <label for="ma7ExitThresholdInput">
-                                <span>日K MA7卖出阈值</span>
-                                <span class="parameter-value">
-                                    <input id="ma7ExitThresholdInput" type="number" min="0" max="100" step="0.5">
-                                    <b>%</b>
-                                </span>
-                            </label>
-                            <label for="hardStoplossInput">
-                                <span>硬止损</span>
-                                <span class="parameter-value">
-                                    <input id="hardStoplossInput" type="number" min="0.1" max="99" step="0.5">
-                                    <b>%</b>
-                                </span>
-                            </label>
-                        </div>
-                        <div class="filter-rules">
-                            <div class="filter-rules-title">
-                                <span>买入与卖出条件</span>
-                                <b id="entryEnabledBadge">允许买入</b>
+                                </summary>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="drawdownStopModeInput">
+                                        <span>止损模式</span>
+                                        <select id="drawdownStopModeInput" class="parameter-select">
+                                            <option value="off">关闭</option>
+                                            <option value="static">静态止损</option>
+                                            <option value="dynamic">动态止损</option>
+                                        </select>
+                                    </label>
+                                    <label class="parameter-row" id="staticDrawdownSetting" for="peakDrawdownStopInput">
+                                        <span>回撤比例</span>
+                                        <span class="parameter-value">
+                                            <input id="peakDrawdownStopInput" type="number" min="0.1" max="99" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" id="dynamicDrawdownSetting" for="dynamicDrawdownActivationInput">
+                                        <span>启动盈利</span>
+                                        <span class="parameter-value">
+                                            <input id="dynamicDrawdownActivationInput" type="number" min="0.1" max="100" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" id="dynamicProfitGivebackSetting" for="dynamicMaxProfitGivebackInput">
+                                        <span>最大盈利回吐</span>
+                                        <span class="parameter-value">
+                                            <input id="dynamicMaxProfitGivebackInput" type="number" min="0.5" max="50" step="0.5">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </details>
+
+                            <details class="parameter-details" id="advancedExitDetails">
+                                <summary>
+                                    <span>
+                                        <strong>高级退出</strong>
+                                        <small>吊灯 / 分批止盈</small>
+                                    </span>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="chandelierExitEnabledInput">
+                                        <span>
+                                            吊灯止损
+                                            <small>ATR(22) × 3</small>
+                                        </span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="chandelierExitEnabledLabel">关闭</b>
+                                            <input id="chandelierExitEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="partialTakeProfitEnabledInput">
+                                        <span>
+                                            分批止盈
+                                            <small>+15%减半，剩余回撤5%</small>
+                                        </span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="partialTakeProfitEnabledLabel">关闭</b>
+                                            <input id="partialTakeProfitEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                </div>
+                            </details>
+                        </section>
+
+                        <section class="settings-tab-panel" id="settingsTabExecution" role="tabpanel" data-settings-panel="execution" hidden>
+                            <div class="parameter-group">
+                                <div class="parameter-group-title">
+                                    <strong>扫描与重入</strong>
+                                    <span>执行约束</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="entryEnabledInput">
+                                        <span>
+                                            允许新买入
+                                            <small>交易总开关</small>
+                                        </span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="entryEnabledLabel">允许</b>
+                                            <input id="entryEnabledInput" type="checkbox" checked>
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="maxOpenTradesInput">
+                                        <span>
+                                            最大持仓数量
+                                            <small>同时持有的交易数</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="maxOpenTradesInput" type="number" min="1" max="4" step="1" value="1">
+                                            <b>笔</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="scanIntervalInput">
+                                        <span>候选扫描频率</span>
+                                        <span class="parameter-value">
+                                            <input id="scanIntervalInput" type="number" min="0.1" max="24" step="0.1">
+                                            <b>小时</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="cooldownEnabledInput">
+                                        <span>卖出后冷却</span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="cooldownEnabledLabel">关闭</b>
+                                            <input id="cooldownEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" id="cooldownDurationSetting" for="cooldownHoursInput">
+                                        <span>冷却时长</span>
+                                        <span class="parameter-value">
+                                            <input id="cooldownHoursInput" type="number" min="0.1" max="168" step="0.1">
+                                            <b>小时</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="candidateReentryRequiredInput">
+                                        <span>重新入选后允许重入</span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="candidateReentryRequiredLabel">关闭</b>
+                                            <input id="candidateReentryRequiredInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                </div>
                             </div>
-                            <ul>
-                                <li id="entryEnabledRule">进入候选列表后直接买入</li>
-                                <li>日K收盘价 &lt; MA7 × (1 - <strong id="ma7ExitThresholdRule">2%</strong>) 时卖出</li>
-                                <li>开仓价下方 <strong id="hardStoplossRule">6%</strong> 硬止损</li>
-                            </ul>
-                        </div>
-                    </section>
+
+                            <details class="settings-rule-summary">
+                                <summary>
+                                    <span>执行前规则摘要</span>
+                                    <b id="entryEnabledBadge">允许买入</b>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="filter-rules">
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">候选准入</div>
+                                        <ul>
+                                            <li>24h 成交额 &gt; 100万 USDT</li>
+                                            <li>上市时间 ≥ 60天，排除稳定币与杠杆代币</li>
+                                            <li><strong id="maFilterRule">日K</strong>：价格 &gt; MA7 &gt; MA20<span id="ma99RuleSuffix"> &gt; MA99</span></li>
+                                            <li><span class="lookback-days-text">20日</span>涨幅 <strong id="minChangeRule">5%</strong>～<strong id="maxChangeRule">100%</strong></li>
+                                            <li>高点回撤 ÷ 累计涨幅 ≤ <strong id="maxDrawdownToGainRatioRule">50%</strong></li>
+                                        </ul>
+                                    </div>
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">交易执行</div>
+                                        <ul>
+                                            <li id="entryEnabledRule">进入候选列表后直接买入</li>
+                                            <li><b id="ma7ExitRuleTimeframe">日K</b>收盘价 &lt; MA7 × (1 - <strong id="ma7ExitThresholdRule">2%</strong>) 时卖出</li>
+                                            <li>开仓价下方 <strong id="hardStoplossRule">6%</strong> 硬止损</li>
+                                            <li id="noProgressExitRule">持仓 12 小时最高盈利未达到 2% 时卖出（关闭）</li>
+                                            <li id="peakDrawdownStopRule">最高价回撤超过 <strong id="peakDrawdownStopRuleValue">5%</strong> 时卖出（关闭）</li>
+                                            <li id="dynamicDrawdownStopRule">动态止损：盈利达到 <strong id="dynamicDrawdownActivationRule">3%</strong> 后启动（关闭）</li>
+                                            <li id="chandelierExitRule">吊灯止损：最高价 - ATR(22) × 3（关闭）</li>
+                                            <li id="partialTakeProfitRule">分批止盈：盈利15%减半仓，剩余仓位回撤5%卖出（关闭）</li>
+                                        </ul>
+                                    </div>
+                                    <div class="rule-section" id="cooldownRuleSection">
+                                        <div class="rule-section-title">重新入场</div>
+                                        <ul>
+                                            <li id="cooldownRule">卖出后同一币种冷却 <strong id="cooldownRuleValue">4小时</strong>（关闭）</li>
+                                            <li id="candidateReentryRequiredRule">卖出后需退出候选池并重新入选才允许买入（关闭）</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+                        </section>
+                    </div>
 
                     <div class="settings-status">
                         <small id="settingsStatus">调整后请点击“保存参数”确认</small>
                     </div>
                 </div>
             </aside>
+        </main>
+
+        <main class="backtest-workspace is-hidden" id="backtestWorkspace">
+            <section class="backtest-toolbar">
+                <div>
+                    <span class="section-label">历史选股回放</span>
+                    <h2>策略回测</h2>
+                    <p class="backtest-notice">
+                        使用当前可交易池回放，不包含历史期间已退市交易对；历史 24h 成交额按 15 分钟收盘价 × 成交量估算；结果已计入 0.1% 双边手续费。
+                    </p>
+                </div>
+                <div class="backtest-controls">
+                    <label>
+                        <span>回测区间</span>
+                        <select id="backtestDaysInput">
+                            <option value="7">近 7 天</option>
+                            <option value="30" selected>近 30 天</option>
+                            <option value="60">近 60 天</option>
+                            <option value="90">近 90 天</option>
+                            <option value="180">近 180 天</option>
+                            <option value="360">近 360 天</option>
+                            <option value="540">近 540 天</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>初始资金</span>
+                        <span class="backtest-money-input">
+                            <input id="backtestInitialBalanceInput" type="number" min="100" max="10000000" step="100" value="1000">
+                            <b>USDT</b>
+                        </span>
+                    </label>
+                    <button class="run-backtest-button" id="runBacktestButton" type="button">
+                        运行回测
+                    </button>
+                    <button class="cancel-backtest-button is-hidden" id="cancelBacktestButton" type="button">
+                        停止
+                    </button>
+                </div>
+            </section>
+
+            <section class="backtest-status" id="backtestStatus">
+                <div>
+                    <strong id="backtestStatusText">尚未运行回测</strong>
+                    <span id="backtestStatusMeta">30 分钟选股 · 15 分钟成交</span>
+                </div>
+                <div class="backtest-progress-track" aria-label="回测进度">
+                    <i id="backtestProgressBar"></i>
+                </div>
+                <b id="backtestProgressText">0%</b>
+            </section>
+
+            <section class="backtest-metrics">
+                <div>
+                    <span>总收益</span>
+                    <strong id="backtestTotalProfit">--</strong>
+                </div>
+                <div>
+                    <span>期末资金</span>
+                    <strong id="backtestEndingBalance">--</strong>
+                </div>
+                <div>
+                    <span>最大回撤</span>
+                    <strong id="backtestMaxDrawdown">--</strong>
+                </div>
+                <div>
+                    <span>胜率</span>
+                    <strong id="backtestWinRate">--</strong>
+                </div>
+                <div>
+                    <span>交易次数</span>
+                    <strong id="backtestTradeCount">--</strong>
+                </div>
+                <div>
+                    <span>盈亏比</span>
+                    <strong id="backtestProfitFactor">--</strong>
+                </div>
+            </section>
+
+            <section class="monthly-returns-panel">
+                <div class="backtest-section-head">
+                    <div>
+                        <span class="section-label">月收益率</span>
+                        <strong>按自然月统计</strong>
+                    </div>
+                    <span>由账户净值曲线计算</span>
+                </div>
+                <div class="monthly-returns-wrap" aria-label="回测每月收益率">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>月份</th>
+                                <th>月初净值</th>
+                                <th>月末净值</th>
+                                <th>收益率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="monthlyReturnsBody">
+                            <tr>
+                                <td colspan="4">暂无月度收益数据</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="backtest-results-grid">
+                <div class="equity-panel">
+                    <div class="backtest-section-head">
+                        <div>
+                            <span class="section-label">账户净值</span>
+                            <strong id="backtestDateRange">--</strong>
+                        </div>
+                        <span id="backtestUniverseMeta">--</span>
+                    </div>
+                    <div class="equity-chart-wrap">
+                        <canvas id="backtestEquityCanvas" aria-label="回测资金曲线"></canvas>
+                        <div class="equity-tooltip" id="backtestEquityTooltip" role="status"></div>
+                        <div class="backtest-empty" id="backtestEmpty">运行回测后显示资金曲线</div>
+                    </div>
+                </div>
+
+                <div class="trades-panel">
+                    <div class="backtest-section-head">
+                        <div>
+                            <span class="section-label">交易明细</span>
+                            <strong>最近退出</strong>
+                        </div>
+                        <span id="backtestTradeMeta">--</span>
+                    </div>
+                    <div class="backtest-table-wrap" tabindex="0" aria-label="回测交易明细，滚动加载">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>交易对</th>
+                                    <th>入场时间</th>
+                                    <th>入场单价</th>
+                                    <th>入场金额</th>
+                                    <th>退出时间</th>
+                                    <th>退出单价</th>
+                                    <th>退出金额</th>
+                                    <th>收益</th>
+                                    <th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="backtestTradesBody">
+                                <tr>
+                                    <td colspan="9">暂无回测交易</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
         </main>
     </div>
 

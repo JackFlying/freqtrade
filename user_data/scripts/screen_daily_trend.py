@@ -2,15 +2,18 @@
 
 import argparse
 import asyncio
+import csv
 import fcntl
 import json
+import os
 import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
 import ccxt.async_support as ccxt
 import pandas as pd
@@ -32,6 +35,7 @@ OUTPUT_COLUMNS = [
     "ma_7",
     "ma_20",
     "ma_99",
+    "ma_99_is_temporary",
     "four_hour_alignment",
     "change_20d",
     "drawdown_20d",
@@ -108,12 +112,21 @@ def load_runtime_settings(
     defaults = {
         "min_change_20d": 5.0,
         "max_change_20d": 100.0,
-        "max_drawdown_20d": 12.0,
+        "max_drawdown_to_gain_ratio_pct": 50.0,
         "lookback_days": 20,
         "use_4h_ma_filter": False,
+        "use_ma99_filter": False,
+        "ma7_reclaim_enabled": True,
+        "ma7_reclaim_tolerance_pct": 1.0,
+        "ma7_reclaim_lookback_days": 2,
         "ma7_exit_threshold_pct": 2.0,
         "hard_stoploss_pct": 6.0,
+        "peak_drawdown_stop_enabled": False,
+        "peak_drawdown_stop_pct": 5.0,
         "entry_enabled": True,
+        "candidate_scan_interval_seconds": int(
+            scanner_config["update_interval_seconds"]
+        ),
     }
     if not settings_path.exists():
         return defaults
@@ -126,8 +139,11 @@ def load_runtime_settings(
             "max_change_20d": float(
                 payload.get("max_change_20d", defaults["max_change_20d"])
             ),
-            "max_drawdown_20d": float(
-                payload.get("max_drawdown_20d", defaults["max_drawdown_20d"])
+            "max_drawdown_to_gain_ratio_pct": float(
+                payload.get(
+                    "max_drawdown_to_gain_ratio_pct",
+                    defaults["max_drawdown_to_gain_ratio_pct"],
+                )
             ),
             "lookback_days": int(
                 payload.get("lookback_days", defaults["lookback_days"])
@@ -137,6 +153,42 @@ def load_runtime_settings(
                     "use_4h_ma_filter",
                     defaults["use_4h_ma_filter"],
                 )
+            ),
+            "use_ma99_filter": bool(
+                payload.get(
+                    "use_ma99_filter",
+                    defaults["use_ma99_filter"],
+                )
+            ),
+            "ma7_reclaim_enabled": bool(
+                payload.get(
+                    "ma7_reclaim_enabled",
+                    defaults["ma7_reclaim_enabled"],
+                )
+            ),
+            "ma7_reclaim_tolerance_pct": max(
+                0.1,
+                min(
+                    5.0,
+                    float(
+                        payload.get(
+                            "ma7_reclaim_tolerance_pct",
+                            defaults["ma7_reclaim_tolerance_pct"],
+                        )
+                    ),
+                ),
+            ),
+            "ma7_reclaim_lookback_days": max(
+                1,
+                min(
+                    5,
+                    int(
+                        payload.get(
+                            "ma7_reclaim_lookback_days",
+                            defaults["ma7_reclaim_lookback_days"],
+                        )
+                    ),
+                ),
             ),
             "ma7_exit_threshold_pct": float(
                 payload.get(
@@ -150,8 +202,32 @@ def load_runtime_settings(
                     defaults["hard_stoploss_pct"],
                 )
             ),
+            "peak_drawdown_stop_enabled": bool(
+                payload.get(
+                    "peak_drawdown_stop_enabled",
+                    defaults["peak_drawdown_stop_enabled"],
+                )
+            ),
+            "peak_drawdown_stop_pct": float(
+                payload.get(
+                    "peak_drawdown_stop_pct",
+                    defaults["peak_drawdown_stop_pct"],
+                )
+            ),
             "entry_enabled": bool(
                 payload.get("entry_enabled", defaults["entry_enabled"])
+            ),
+            "candidate_scan_interval_seconds": max(
+                60,
+                min(
+                    86400,
+                    int(
+                        payload.get(
+                            "candidate_scan_interval_seconds",
+                            defaults["candidate_scan_interval_seconds"],
+                        )
+                    ),
+                ),
             ),
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -197,6 +273,109 @@ def cached_universe(
         return None
 
 
+def load_recent_risk_pairs(scanner_config: dict[str, Any]) -> set[str]:
+    configured_path = scanner_config.get("risk_flags_file")
+    if not configured_path:
+        return set()
+    path = ROOT_DIR / str(configured_path)
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        entries = payload.get("pairs", {})
+        if not isinstance(entries, dict):
+            return set()
+        now = datetime.now(timezone.utc)
+        lookback_days = int(scanner_config.get("risk_flag_lookback_days", 30))
+        cutoff = now - pd.Timedelta(days=lookback_days)
+        risk_pairs: set[str] = set()
+        for pair, entry in entries.items():
+            if isinstance(entry, str):
+                flagged_at = entry
+                expires_at = None
+            elif isinstance(entry, dict):
+                flagged_at = entry.get("flagged_at")
+                expires_at = entry.get("expires_at")
+            else:
+                continue
+            try:
+                flagged_time = pd.Timestamp(flagged_at).tz_convert("UTC")
+            except (TypeError, ValueError):
+                continue
+            if flagged_time < cutoff:
+                continue
+            if expires_at:
+                try:
+                    if pd.Timestamp(expires_at).tz_convert("UTC") < now:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            risk_pairs.add(str(pair))
+        return risk_pairs
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return set()
+
+
+def is_wash_trading_suspect(
+    dataframe: pd.DataFrame,
+    scanner_config: dict[str, Any],
+) -> bool:
+    if not bool(scanner_config.get("wash_trading_filter_enabled", False)):
+        return False
+    if len(dataframe) < 31:
+        return False
+    daily = dataframe.iloc[:-1].tail(30).copy()
+    if len(daily) < 30:
+        return False
+    daily_quote_volume = daily["close"] * daily["volume"]
+    median_volume = float(daily_quote_volume.median())
+    minimum_volume = float(
+        scanner_config.get("wash_trading_min_daily_quote_volume", 0)
+    )
+    if median_volume < minimum_volume:
+        return False
+    range_pct = (daily["high"] - daily["low"]) / daily["open"].replace(0, pd.NA) * 100
+    spike_ratio = float(
+        scanner_config.get("wash_trading_volume_spike_ratio", 12.0)
+    )
+    max_range_pct = float(
+        scanner_config.get("wash_trading_max_range_pct", 0.6)
+    )
+    suspicious_days = int(
+        ((daily_quote_volume >= median_volume * spike_ratio)
+         & (range_pct <= max_range_pct)).sum()
+    )
+    required_days = int(
+        scanner_config.get("wash_trading_min_suspicious_days", 3)
+    )
+    return suspicious_days >= required_days
+
+
+def has_ma7_reclaim(
+    dataframe: pd.DataFrame,
+    tolerance_pct: float,
+    lookback_bars: int,
+) -> bool:
+    if len(dataframe) < 7:
+        return False
+    start = max(0, len(dataframe) - lookback_bars)
+    for touch_index in range(start, len(dataframe)):
+        touch = dataframe.iloc[touch_index]
+        if pd.isna(touch["ma_7"]) or float(touch["low"]) > float(
+            touch["ma_7"]
+        ) * (1 + tolerance_pct / 100):
+            continue
+        for reclaim_index in range(touch_index, len(dataframe)):
+            reclaim = dataframe.iloc[reclaim_index]
+            if (
+                pd.notna(reclaim["ma_7"])
+                and float(reclaim["close"]) > float(reclaim["ma_7"])
+                and float(reclaim["close"]) > float(reclaim["open"])
+            ):
+                return True
+    return False
+
+
 async def refresh_universe(
     exchange: Any,
     config: dict[str, Any],
@@ -207,6 +386,7 @@ async def refresh_universe(
     whitelist = config["exchange"]["pair_whitelist"]
     blacklist = config["exchange"]["pair_blacklist"]
     stablecoin_bases = set(scanner_config.get("stablecoin_bases", []))
+    recent_risk_pairs = load_recent_risk_pairs(scanner_config)
     minimum_quote_volume = float(scanner_config["minimum_quote_volume"])
 
     pairs = []
@@ -220,6 +400,7 @@ async def refresh_universe(
             and matches_any(pair, whitelist)
             and not matches_any(pair, blacklist)
             and market.get("base") not in stablecoin_bases
+            and pair not in recent_risk_pairs
         ):
             continue
 
@@ -287,6 +468,10 @@ async def has_four_hour_ma_alignment(
     exchange: Any,
     pair: str,
     semaphore: asyncio.Semaphore,
+    require_ma99: bool,
+    require_ma7_reclaim: bool,
+    ma7_reclaim_tolerance_pct: float,
+    ma7_reclaim_lookback_bars: int,
 ) -> bool:
     rows = await fetch_ohlcv_with_retry(
         exchange,
@@ -306,11 +491,26 @@ async def has_four_hour_ma_alignment(
             min_periods=period,
         ).mean()
     latest = dataframe.iloc[-1]
-    return bool(
+    aligned = bool(
         latest["close"] > latest["ma_7"]
         and latest["ma_7"] > latest["ma_20"]
-        and latest["ma_20"] > latest["ma_99"]
     )
+    if require_ma99:
+        ma99_rising = (
+            len(dataframe) >= 2
+            and pd.notna(dataframe["ma_99"].iloc[-2])
+            and latest["ma_99"] > dataframe["ma_99"].iloc[-2]
+        )
+        aligned = aligned and bool(
+            latest["ma_20"] > latest["ma_99"] and ma99_rising
+        )
+    if require_ma7_reclaim:
+        aligned = aligned and has_ma7_reclaim(
+            dataframe,
+            ma7_reclaim_tolerance_pct,
+            ma7_reclaim_lookback_bars,
+        )
+    return aligned
 
 
 async def update_pair(
@@ -358,14 +558,25 @@ async def update_pair(
         minimum_listing_days = int(scanner_config["minimum_listing_days"])
         if completed_count < minimum_listing_days:
             return None, None
+        if is_wash_trading_suspect(dataframe, scanner_config):
+            return None, None
 
-        for period in (7, 20, 99):
+        for period in (7, 20):
             dataframe[f"ma_{period}"] = dataframe["close"].rolling(
                 window=period,
                 min_periods=period,
             ).mean()
+        dataframe["ma_99"] = dataframe["close"].rolling(
+            window=99,
+            min_periods=1,
+        ).mean()
 
         latest = dataframe.iloc[-1]
+        ma99_rising = (
+            len(dataframe) >= 2
+            and pd.notna(dataframe["ma_99"].iloc[-2])
+            and latest["ma_99"] > dataframe["ma_99"].iloc[-2]
+        )
         lookback_days = int(scanner_config["lookback_days"])
         if len(dataframe) < lookback_days + 1:
             return None, f"{pair}: insufficient data for {lookback_days}-day lookback"
@@ -374,7 +585,15 @@ async def update_pair(
         ) * 100
         highest_20d = dataframe["high"].tail(lookback_days).max()
         drawdown_20d = (highest_20d - latest["close"]) / highest_20d * 100
-        max_drawdown_20d = float(scanner_config["max_drawdown_20d"])
+        latest_open = float(latest["open"])
+        change_today = (
+            (float(latest["close"]) / latest_open - 1) * 100
+            if latest_open
+            else None
+        )
+        max_drawdown_to_gain_ratio_pct = float(
+            scanner_config["max_drawdown_to_gain_ratio_pct"]
+        )
         min_change_20d = float(scanner_config["min_change_20d"])
         max_change_20d = float(scanner_config["max_change_20d"])
         required_values = [
@@ -391,13 +610,32 @@ async def update_pair(
         common_candidate = bool(
             change_20d > min_change_20d
             and change_20d < max_change_20d
-            and drawdown_20d <= max_drawdown_20d
+            and change_20d > 0
+            and drawdown_20d
+            <= change_20d * max_drawdown_to_gain_ratio_pct / 100
+        )
+        use_ma99_filter = bool(scanner_config["use_ma99_filter"])
+        ma7_reclaim_enabled = bool(scanner_config["ma7_reclaim_enabled"])
+        ma7_reclaim_tolerance_pct = float(
+            scanner_config["ma7_reclaim_tolerance_pct"]
+        )
+        ma7_reclaim_lookback_days = int(
+            scanner_config["ma7_reclaim_lookback_days"]
         )
         daily_alignment = bool(
             latest["close"] > latest["ma_7"]
             and latest["ma_7"] > latest["ma_20"]
-            and latest["ma_20"] > latest["ma_99"]
         )
+        if ma7_reclaim_enabled:
+            daily_alignment = daily_alignment and has_ma7_reclaim(
+                dataframe,
+                ma7_reclaim_tolerance_pct,
+                ma7_reclaim_lookback_days,
+            )
+        if use_ma99_filter:
+            daily_alignment = daily_alignment and bool(
+                latest["ma_20"] > latest["ma_99"] and ma99_rising
+            )
         use_four_hour_filter = bool(scanner_config["use_4h_ma_filter"])
         four_hour_alignment = None
         if common_candidate and use_four_hour_filter:
@@ -405,6 +643,10 @@ async def update_pair(
                 exchange,
                 pair,
                 semaphore,
+                use_ma99_filter,
+                ma7_reclaim_enabled,
+                ma7_reclaim_tolerance_pct,
+                ma7_reclaim_lookback_days,
             )
         selected_alignment = (
             four_hour_alignment if use_four_hour_filter else daily_alignment
@@ -420,9 +662,13 @@ async def update_pair(
                     candle_time + pd.Timedelta(days=1) > now
                 ),
                 "price": round(float(latest["close"]), 8),
+                "change_today": (
+                    round(change_today, 2) if change_today is not None else None
+                ),
                 "ma_7": round(float(latest["ma_7"]), 8),
                 "ma_20": round(float(latest["ma_20"]), 8),
                 "ma_99": round(float(latest["ma_99"]), 8),
+                "ma_99_is_temporary": completed_count < 99,
                 "four_hour_alignment": four_hour_alignment,
                 "change_20d": round(float(change_20d), 2),
                 "drawdown_20d": round(float(drawdown_20d), 2),
@@ -443,6 +689,158 @@ async def update_pair(
         return None, f"{pair}: {type(exc).__name__}: {exc}"
 
 
+def telegram_credentials() -> tuple[str, str] | None:
+    # Reuse the same credentials the trade bot loads from /etc/freqtrade.env.
+    # The scanner systemd unit sources that file, so these env vars are present
+    # on the server; locally they are simply absent and notifications are
+    # skipped silently.
+    token = os.environ.get("FREQTRADE__TELEGRAM__TOKEN", "").strip()
+    chat_id = os.environ.get("FREQTRADE__TELEGRAM__CHAT_ID", "").strip()
+    if token and chat_id:
+        return token, chat_id
+    return None
+
+
+def read_previous_candidate_pairs(candidates_path: Path) -> set[str] | None:
+    # Returns None when no baseline exists yet (first run), so the caller can
+    # establish a baseline without sending a noisy "everything is new" alert.
+    if not candidates_path.exists():
+        return None
+    try:
+        with candidates_path.open(encoding="utf-8", newline="") as csv_file:
+            return {
+                row["pair"]
+                for row in csv.DictReader(csv_file)
+                if row.get("pair")
+            }
+    except (OSError, KeyError):
+        return None
+
+
+def format_percent(value: Any, signed: bool = True) -> str:
+    if value is None:
+        return "--"
+    number = float(value)
+    prefix = "+" if signed and number >= 0 else ""
+    return f"{prefix}{number:.2f}%"
+
+
+def format_quote_volume(value: Any) -> str:
+    if value is None:
+        return "--"
+    number = float(value)
+    if number >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.2f}B"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.2f}K"
+    return f"{number:.0f}"
+
+
+def escape_markdown(text: str) -> str:
+    for character in ("_", "*", "`", "["):
+        text = text.replace(character, f"\\{character}")
+    return text
+
+
+def format_candidate_line(result: dict[str, Any], is_new: bool = False) -> str:
+    pair = escape_markdown(result["pair"])
+    price = result.get("price")
+    price_text = f"{price:g}" if price is not None else "--"
+    marker = "🆕 " if is_new else ""
+    return (
+        f"{marker}• *{pair}* {price_text} "
+        f"(今日 {format_percent(result.get('change_today'))})\n"
+        f"  {int(result.get('lookback_days', 0)) or ''}日涨幅 "
+        f"{format_percent(result.get('change_20d'))} · "
+        f"高点回撤 -{float(result.get('drawdown_20d') or 0):.2f}% · "
+        f"24h {format_quote_volume(result.get('quote_volume_24h'))} USDT"
+    )
+
+
+def build_telegram_message(
+    candidates: list[dict[str, Any]],
+    added_pairs: set[str],
+    removed_pairs: list[str],
+) -> str:
+    # Push the full current candidate list on every change, marking newly added
+    # pairs with 🆕 and listing removed pairs separately at the bottom.
+    total = len(candidates)
+    added_count = len(added_pairs)
+    removed_count = len(removed_pairs)
+    header = (
+        f"📡 *趋势候选更新*（当前 {total} 个"
+        f" · 🆕{added_count} 🔻{removed_count}）"
+    )
+    lines = [header]
+    if candidates:
+        lines.append("")
+        lines.extend(
+            format_candidate_line(result, result["pair"] in added_pairs)
+            for result in candidates
+        )
+    else:
+        lines.append("")
+        lines.append("当前没有满足条件的候选币。")
+    if removed_pairs:
+        lines.append("")
+        lines.append(f"🔻 *已移除 {removed_count}*")
+        lines.append(
+            "、".join(escape_markdown(pair) for pair in removed_pairs)
+        )
+    return "\n".join(lines)
+
+
+def send_telegram_message(token: str, chat_id: str, message: str) -> None:
+    payload = urlencode(
+        {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": "true",
+        }
+    ).encode("utf-8")
+    request = Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            response.read()
+    except Exception as exc:  # Notification failures must never break scanning.
+        print(f"Telegram notification failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
+def notify_candidate_changes(
+    candidates: list[dict[str, Any]],
+    previous_pairs: set[str] | None,
+    lookback_days: int,
+) -> None:
+    credentials = telegram_credentials()
+    if credentials is None:
+        return
+    if previous_pairs is None:
+        # First run for this output directory: establish a baseline silently.
+        return
+
+    current_pairs = {result["pair"] for result in candidates}
+    added_pairs = current_pairs - previous_pairs
+    removed_pairs = sorted(previous_pairs - current_pairs)
+    if not added_pairs and not removed_pairs:
+        return
+
+    # Send the full current list on any change; candidates keep the rank order
+    # produced by write_outputs (candidate first, then by 24h volume).
+    enriched = [
+        {**result, "lookback_days": lookback_days} for result in candidates
+    ]
+    message = build_telegram_message(enriched, added_pairs, removed_pairs)
+    token, chat_id = credentials
+    send_telegram_message(token, chat_id, message)
+
+
 def write_outputs(
     results: list[dict[str, Any]],
     errors: list[str],
@@ -450,7 +848,6 @@ def write_outputs(
     universe_size: int,
     min_change_20d: float,
     max_change_20d: float,
-    max_drawdown_20d: float,
     lookback_days: int,
     use_4h_ma_filter: bool,
 ) -> None:
@@ -499,7 +896,6 @@ def write_outputs(
             "moving_average_type": "SMA",
             "min_change_20d": min_change_20d,
             "max_change_20d": max_change_20d,
-            "max_drawdown_20d": max_drawdown_20d,
             "lookback_days": lookback_days,
             "ma_filter_timeframe": "4h" if use_4h_ma_filter else "1d",
         },
@@ -556,6 +952,10 @@ async def run_screen(args: argparse.Namespace) -> int:
                 if item["pair"] in exchange.markets
                 and exchange.markets[item["pair"]].get("active") is not False
             ]
+        recent_risk_pairs = load_recent_risk_pairs(scanner_config)
+        universe = [
+            item for item in universe if item["pair"] not in recent_risk_pairs
+        ]
 
         print(f"Updating provisional daily candles for {len(universe)} pairs...")
         semaphore = asyncio.Semaphore(int(scanner_config["concurrency"]))
@@ -581,6 +981,18 @@ async def run_screen(args: argparse.Namespace) -> int:
             if index % 25 == 0 or index == len(tasks):
                 print(f"Processed {index}/{len(tasks)}")
 
+        # Read the previous candidate set before overwriting the CSV so we can
+        # detect additions/removals. Only the live (non-preview) scan notifies;
+        # preview scans triggered from the console write to a temp directory.
+        is_preview = args.output_directory is not None
+        previous_candidate_pairs = (
+            None
+            if is_preview
+            else read_previous_candidate_pairs(
+                output_directory / "daily_trend_candidates.csv"
+            )
+        )
+
         write_outputs(
             results,
             errors,
@@ -588,11 +1000,19 @@ async def run_screen(args: argparse.Namespace) -> int:
             len(universe),
             float(scanner_config["min_change_20d"]),
             float(scanner_config["max_change_20d"]),
-            float(scanner_config["max_drawdown_20d"]),
             int(scanner_config["lookback_days"]),
             bool(scanner_config["use_4h_ma_filter"]),
         )
         candidate_count = sum(result["trend_candidate"] for result in results)
+        if not is_preview:
+            candidates = [
+                result for result in results if result["trend_candidate"]
+            ]
+            notify_candidate_changes(
+                candidates,
+                previous_candidate_pairs,
+                int(scanner_config["lookback_days"]),
+            )
         print(
             f"Done: {len(results)} age-eligible, "
             f"{candidate_count} trend candidates, {len(errors)} errors."
@@ -639,7 +1059,11 @@ def main() -> int:
         if not args.loop:
             return result
 
-        interval = int(scanner_config["update_interval_seconds"])
+        # Re-read runtime settings every cycle so the console can change the
+        # scan interval without restarting the scanner service. Falls back to
+        # the config value when the settings file is missing or malformed.
+        runtime_settings = load_runtime_settings(scanner_config, args.settings_file)
+        interval = int(runtime_settings["candidate_scan_interval_seconds"])
         next_run = ((int(time.time()) // interval) + 1) * interval + 5
         delay = max(1, next_run - int(time.time()))
         print(f"Next update in {delay} seconds.", flush=True)

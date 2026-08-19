@@ -9,12 +9,64 @@ const COLORS = {
     crosshair: "#8797a2",
 };
 
+const CANDLE_CACHE_TTL_MS = 30_000;
+const BACKTEST_TRADE_PAGE_SIZE = 100;
+
+const STRATEGY_PRESETS = {
+    "1d": {
+        label: "日K策略",
+        lookback_days: 3,
+        min_change_20d: 10,
+        max_change_20d: 50,
+        max_drawdown_to_gain_ratio_pct: 70,
+        use_4h_ma_filter: false,
+        use_ma99_filter: true,
+        ma7_reclaim_enabled: true,
+        ma7_reclaim_tolerance_pct: 1,
+        ma7_reclaim_lookback_days: 2,
+        ma7_exit_threshold_pct: 2.5,
+        hard_stoploss_pct: 5,
+        dynamic_drawdown_stop_enabled: true,
+        dynamic_drawdown_activation_pct: 1.5,
+        dynamic_max_profit_giveback_pct: 2,
+        chandelier_exit_enabled: false,
+        partial_take_profit_enabled: false,
+        cooldown_enabled: true,
+        cooldown_hours: 4,
+        candidate_scan_interval_hours: 0.5,
+    },
+    "4h": {
+        label: "4hK线策略",
+        lookback_days: 2,
+        min_change_20d: 6,
+        max_change_20d: 30,
+        max_drawdown_to_gain_ratio_pct: 50,
+        use_4h_ma_filter: true,
+        use_ma99_filter: true,
+        ma7_reclaim_enabled: true,
+        ma7_reclaim_tolerance_pct: 1,
+        ma7_reclaim_lookback_days: 2,
+        ma7_exit_threshold_pct: 1,
+        hard_stoploss_pct: 7,
+        dynamic_drawdown_stop_enabled: false,
+        dynamic_drawdown_activation_pct: 1.5,
+        dynamic_max_profit_giveback_pct: 2,
+        chandelier_exit_enabled: false,
+        partial_take_profit_enabled: false,
+        cooldown_enabled: true,
+        cooldown_hours: 4,
+        candidate_scan_interval_hours: 4,
+    },
+};
+
 const state = {
     candidates: [],
     filteredCandidates: [],
     selectedPair: null,
+    sortKey: "default",
     timeframe: "1d",
     candles: [],
+    candleCache: new Map(),
     chartRequest: 0,
     hoverIndex: null,
     viewCount: null,
@@ -24,6 +76,12 @@ const state = {
     dragStartEnd: 0,
     trackpadPanRemainder: 0,
     settingsDirty: false,
+    backtestResult: null,
+    backtestPollTimer: null,
+    backtestHoverIndex: null,
+    backtestTrades: [],
+    backtestVisibleTradeCount: 0,
+    settingsTab: "filter",
 };
 
 const elements = {
@@ -33,29 +91,86 @@ const elements = {
     candidateCount: document.querySelector("#candidateCount"),
     previewBadge: document.querySelector("#previewBadge"),
     candidateList: document.querySelector("#candidateList"),
+    sortSelect: document.querySelector("#sortSelect"),
     refreshButton: document.querySelector("#refreshButton"),
     refreshButtonLabel: document.querySelector("#refreshButton span"),
     entryEnabledInput: document.querySelector("#entryEnabledInput"),
+    maxOpenTradesInput: document.querySelector("#maxOpenTradesInput"),
+    strategyTimeframeInput: document.querySelector("#strategyTimeframeInput"),
     entryEnabledLabel: document.querySelector("#entryEnabledLabel"),
     entryEnabledBadge: document.querySelector("#entryEnabledBadge"),
     entryEnabledRule: document.querySelector("#entryEnabledRule"),
-    candidateScanInterval: document.querySelector("#candidateScanInterval"),
+    scanIntervalInput: document.querySelector("#scanIntervalInput"),
     lookbackDaysInput: document.querySelector("#lookbackDaysInput"),
     minChange20dInput: document.querySelector("#minChange20dInput"),
     maxChange20dInput: document.querySelector("#maxChange20dInput"),
-    maxDrawdownInput: document.querySelector("#maxDrawdownInput"),
-    use4hMaFilterInput: document.querySelector("#use4hMaFilterInput"),
+    maxDrawdownToGainRatioInput: document.querySelector("#maxDrawdownToGainRatioInput"),
+    useMa99FilterInput: document.querySelector("#useMa99FilterInput"),
+    ma7ReclaimEnabledInput: document.querySelector("#ma7ReclaimEnabledInput"),
+    ma7ReclaimEnabledLabel: document.querySelector("#ma7ReclaimEnabledLabel"),
+    ma7ReclaimToleranceInput: document.querySelector("#ma7ReclaimToleranceInput"),
+    ma7ReclaimLookbackInput: document.querySelector("#ma7ReclaimLookbackInput"),
+    ma7ReclaimLookbackUnit: document.querySelector("#ma7ReclaimLookbackUnit"),
     ma7ExitThresholdInput: document.querySelector("#ma7ExitThresholdInput"),
     hardStoplossInput: document.querySelector("#hardStoplossInput"),
+    noProgressExitEnabledInput: document.querySelector("#noProgressExitEnabledInput"),
+    noProgressExitEnabledLabel: document.querySelector("#noProgressExitEnabledLabel"),
+    drawdownStopModeInput: document.querySelector("#drawdownStopModeInput"),
+    staticDrawdownSetting: document.querySelector("#staticDrawdownSetting"),
+    dynamicDrawdownSetting: document.querySelector("#dynamicDrawdownSetting"),
+    dynamicProfitGivebackSetting: document.querySelector("#dynamicProfitGivebackSetting"),
+    peakDrawdownStopInput: document.querySelector("#peakDrawdownStopInput"),
+    dynamicDrawdownActivationInput: document.querySelector("#dynamicDrawdownActivationInput"),
+    dynamicMaxProfitGivebackInput: document.querySelector("#dynamicMaxProfitGivebackInput"),
+    chandelierExitEnabledInput: document.querySelector(
+        "#chandelierExitEnabledInput",
+    ),
+    chandelierExitEnabledLabel: document.querySelector(
+        "#chandelierExitEnabledLabel",
+    ),
+    partialTakeProfitEnabledInput: document.querySelector(
+        "#partialTakeProfitEnabledInput",
+    ),
+    partialTakeProfitEnabledLabel: document.querySelector(
+        "#partialTakeProfitEnabledLabel",
+    ),
+    cooldownEnabledInput: document.querySelector("#cooldownEnabledInput"),
+    cooldownEnabledLabel: document.querySelector("#cooldownEnabledLabel"),
+    candidateReentryRequiredInput: document.querySelector("#candidateReentryRequiredInput"),
+    candidateReentryRequiredLabel: document.querySelector("#candidateReentryRequiredLabel"),
+    cooldownDurationSetting: document.querySelector("#cooldownDurationSetting"),
+    cooldownHoursInput: document.querySelector("#cooldownHoursInput"),
     saveSettingsButton: document.querySelector("#saveSettingsButton"),
-    maFilterTimeframeLabel: document.querySelector("#maFilterTimeframeLabel"),
     settingsStatus: document.querySelector("#settingsStatus"),
+    settingsTabs: document.querySelector("#settingsTabs"),
+    settingsTabPanels: document.querySelectorAll("[data-settings-panel]"),
+    drawdownProtectionDetails: document.querySelector(
+        "#drawdownProtectionDetails",
+    ),
+    advancedExitDetails: document.querySelector("#advancedExitDetails"),
     minChangeRule: document.querySelector("#minChangeRule"),
     maxChangeRule: document.querySelector("#maxChangeRule"),
-    maxDrawdownRule: document.querySelector("#maxDrawdownRule"),
+    maxDrawdownToGainRatioRule: document.querySelector("#maxDrawdownToGainRatioRule"),
     maFilterRule: document.querySelector("#maFilterRule"),
+    ma99FilterLabel: document.querySelector("#ma99FilterLabel"),
+    ma99RuleSuffix: document.querySelector("#ma99RuleSuffix"),
     ma7ExitThresholdRule: document.querySelector("#ma7ExitThresholdRule"),
+    ma7ExitThresholdTimeframe: document.querySelector(
+        "#ma7ExitThresholdTimeframe",
+    ),
+    ma7ExitRuleTimeframe: document.querySelector("#ma7ExitRuleTimeframe"),
     hardStoplossRule: document.querySelector("#hardStoplossRule"),
+    noProgressExitRule: document.querySelector("#noProgressExitRule"),
+    peakDrawdownStopRule: document.querySelector("#peakDrawdownStopRule"),
+    dynamicDrawdownStopRule: document.querySelector("#dynamicDrawdownStopRule"),
+    dynamicDrawdownActivationRule: document.querySelector("#dynamicDrawdownActivationRule"),
+    chandelierExitRule: document.querySelector("#chandelierExitRule"),
+    partialTakeProfitRule: document.querySelector("#partialTakeProfitRule"),
+    cooldownRule: document.querySelector("#cooldownRule"),
+    cooldownRuleSection: document.querySelector("#cooldownRuleSection"),
+    cooldownRuleValue: document.querySelector("#cooldownRuleValue"),
+    candidateReentryRequiredRule: document.querySelector("#candidateReentryRequiredRule"),
+    peakDrawdownStopRuleValue: document.querySelector("#peakDrawdownStopRuleValue"),
     lookbackDaysTexts: document.querySelectorAll(".lookback-days-text"),
     searchInput: document.querySelector("#searchInput"),
     pairName: document.querySelector("#pairName"),
@@ -79,6 +194,32 @@ const elements = {
     resetChartButton: document.querySelector("#resetChartButton"),
     zoomOutButton: document.querySelector("#zoomOutButton"),
     zoomInButton: document.querySelector("#zoomInButton"),
+    viewTabs: document.querySelector("#viewTabs"),
+    liveWorkspace: document.querySelector("#liveWorkspace"),
+    backtestWorkspace: document.querySelector("#backtestWorkspace"),
+    backtestDaysInput: document.querySelector("#backtestDaysInput"),
+    backtestInitialBalanceInput: document.querySelector("#backtestInitialBalanceInput"),
+    runBacktestButton: document.querySelector("#runBacktestButton"),
+    cancelBacktestButton: document.querySelector("#cancelBacktestButton"),
+    backtestStatusText: document.querySelector("#backtestStatusText"),
+    backtestStatusMeta: document.querySelector("#backtestStatusMeta"),
+    backtestProgressBar: document.querySelector("#backtestProgressBar"),
+    backtestProgressText: document.querySelector("#backtestProgressText"),
+    backtestTotalProfit: document.querySelector("#backtestTotalProfit"),
+    backtestEndingBalance: document.querySelector("#backtestEndingBalance"),
+    backtestMaxDrawdown: document.querySelector("#backtestMaxDrawdown"),
+    backtestWinRate: document.querySelector("#backtestWinRate"),
+    backtestTradeCount: document.querySelector("#backtestTradeCount"),
+    backtestProfitFactor: document.querySelector("#backtestProfitFactor"),
+    backtestDateRange: document.querySelector("#backtestDateRange"),
+    backtestUniverseMeta: document.querySelector("#backtestUniverseMeta"),
+    backtestTradeMeta: document.querySelector("#backtestTradeMeta"),
+    monthlyReturnsBody: document.querySelector("#monthlyReturnsBody"),
+    backtestEquityCanvas: document.querySelector("#backtestEquityCanvas"),
+    backtestEquityTooltip: document.querySelector("#backtestEquityTooltip"),
+    backtestEmpty: document.querySelector("#backtestEmpty"),
+    backtestTableWrap: document.querySelector(".backtest-table-wrap"),
+    backtestTradesBody: document.querySelector("#backtestTradesBody"),
 };
 
 function formatCompact(value) {
@@ -143,7 +284,16 @@ async function fetchJson(url, options = {}) {
         let detail = `${response.status} ${response.statusText}`;
         try {
             const payload = await response.json();
-            detail = payload.detail || detail;
+            const apiDetail = payload.detail;
+            if (typeof apiDetail === "string") {
+                detail = apiDetail;
+            } else if (Array.isArray(apiDetail)) {
+                detail = apiDetail
+                    .map((item) => item.msg || JSON.stringify(item))
+                    .join("；");
+            } else if (apiDetail) {
+                detail = JSON.stringify(apiDetail);
+            }
         } catch {
             // Keep the HTTP status when the response is not JSON.
         }
@@ -197,18 +347,53 @@ async function loadCandidates({
 async function loadSettings() {
     try {
         const settings = await fetchJson("/api/settings");
+        elements.strategyTimeframeInput.value = settings.strategy_timeframe || "1d";
         const scanSeconds = Number(settings.candidate_scan_interval_seconds);
-        elements.candidateScanInterval.textContent = Number.isFinite(scanSeconds)
-            ? `每${formatDuration(scanSeconds)}`
-            : "--";
+        elements.scanIntervalInput.value = Number.isFinite(scanSeconds)
+            ? Math.round((scanSeconds / 3600) * 10) / 10
+            : "";
         elements.entryEnabledInput.checked = settings.entry_enabled;
+        elements.maxOpenTradesInput.value = settings.max_open_trades ?? 1;
         elements.lookbackDaysInput.value = settings.lookback_days;
         elements.minChange20dInput.value = settings.min_change_20d;
         elements.maxChange20dInput.value = settings.max_change_20d;
-        elements.maxDrawdownInput.value = settings.max_drawdown_20d;
-        elements.use4hMaFilterInput.checked = settings.use_4h_ma_filter;
+        elements.maxDrawdownToGainRatioInput.value =
+            settings.max_drawdown_to_gain_ratio_pct;
+        elements.useMa99FilterInput.checked = settings.use_ma99_filter;
+        elements.ma7ReclaimEnabledInput.checked =
+            settings.ma7_reclaim_enabled ?? true;
+        elements.ma7ReclaimToleranceInput.value =
+            settings.ma7_reclaim_tolerance_pct ?? 1;
+        elements.ma7ReclaimLookbackInput.value =
+            settings.ma7_reclaim_lookback_days ?? 2;
         elements.ma7ExitThresholdInput.value = settings.ma7_exit_threshold_pct;
         elements.hardStoplossInput.value = settings.hard_stoploss_pct;
+        elements.noProgressExitEnabledInput.checked =
+            settings.no_progress_exit_enabled;
+        elements.drawdownStopModeInput.value =
+            settings.dynamic_drawdown_stop_enabled
+                ? "dynamic"
+                : settings.peak_drawdown_stop_enabled
+                    ? "static"
+                    : "off";
+        elements.peakDrawdownStopInput.value = settings.peak_drawdown_stop_pct;
+        elements.dynamicDrawdownActivationInput.value =
+            settings.dynamic_drawdown_activation_pct;
+        elements.dynamicMaxProfitGivebackInput.value =
+            settings.dynamic_max_profit_giveback_pct;
+        elements.chandelierExitEnabledInput.checked =
+            settings.chandelier_exit_enabled ?? false;
+        elements.partialTakeProfitEnabledInput.checked =
+            settings.partial_take_profit_enabled ?? false;
+        elements.drawdownProtectionDetails.open =
+            elements.drawdownStopModeInput.value !== "off";
+        elements.advancedExitDetails.open =
+            elements.chandelierExitEnabledInput.checked
+            || elements.partialTakeProfitEnabledInput.checked;
+        elements.cooldownEnabledInput.checked = settings.cooldown_enabled;
+        elements.candidateReentryRequiredInput.checked =
+            settings.candidate_reentry_required;
+        elements.cooldownHoursInput.value = settings.cooldown_hours;
         updateFilterRuleValues();
         state.settingsDirty = false;
         elements.saveSettingsButton.disabled = true;
@@ -217,29 +402,128 @@ async function loadSettings() {
     }
 }
 
-function formatDuration(seconds) {
-    if (seconds % 3600 === 0) return `${seconds / 3600}小时`;
-    if (seconds % 60 === 0) return `${seconds / 60}分钟`;
-    return `${seconds}秒`;
-}
-
 function markSettingsDirty() {
     state.settingsDirty = true;
     elements.saveSettingsButton.disabled = false;
     elements.settingsStatus.textContent = "参数尚未保存";
 }
 
+function activateSettingsTab(tabName, focus = false) {
+    const tabs = Array.from(
+        elements.settingsTabs.querySelectorAll("[data-settings-tab]"),
+    );
+    const target = tabs.some((tab) => tab.dataset.settingsTab === tabName)
+        ? tabName
+        : "filter";
+    state.settingsTab = target;
+    tabs.forEach((tab) => {
+        const active = tab.dataset.settingsTab === target;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+        tab.tabIndex = 0;
+        if (active && focus) tab.focus();
+    });
+    elements.settingsTabPanels.forEach((panel) => {
+        const active = panel.dataset.settingsPanel === target;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+    });
+    try {
+        window.localStorage.setItem("dashboard-settings-tab", target);
+    } catch (error) {
+        // Local storage can be unavailable in restricted browser contexts.
+    }
+}
+
+function initializeSettingsTabs() {
+    let initialTab = "filter";
+    try {
+        initialTab =
+            window.localStorage.getItem("dashboard-settings-tab") || "filter";
+    } catch (error) {
+        initialTab = "filter";
+    }
+    activateSettingsTab(initialTab);
+}
+
 function currentSettingsPayload() {
     return {
+        strategy_timeframe: elements.strategyTimeframeInput.value,
         entry_enabled: elements.entryEnabledInput.checked,
+        max_open_trades: Number(elements.maxOpenTradesInput.value),
         lookback_days: Number(elements.lookbackDaysInput.value),
         min_change_20d: Number(elements.minChange20dInput.value),
         max_change_20d: Number(elements.maxChange20dInput.value),
-        max_drawdown_20d: Number(elements.maxDrawdownInput.value),
-        use_4h_ma_filter: elements.use4hMaFilterInput.checked,
+        max_drawdown_to_gain_ratio_pct: Number(
+            elements.maxDrawdownToGainRatioInput.value,
+        ),
+        use_4h_ma_filter: elements.strategyTimeframeInput.value === "4h",
+        use_ma99_filter: elements.useMa99FilterInput.checked,
+        ma7_reclaim_enabled: elements.ma7ReclaimEnabledInput.checked,
+        ma7_reclaim_tolerance_pct: Number(
+            elements.ma7ReclaimToleranceInput.value,
+        ),
+        ma7_reclaim_lookback_days: Number(
+            elements.ma7ReclaimLookbackInput.value,
+        ),
         ma7_exit_threshold_pct: Number(elements.ma7ExitThresholdInput.value),
         hard_stoploss_pct: Number(elements.hardStoplossInput.value),
+        no_progress_exit_enabled: elements.noProgressExitEnabledInput.checked,
+        candidate_reentry_required:
+            elements.candidateReentryRequiredInput.checked,
+        peak_drawdown_stop_enabled: elements.drawdownStopModeInput.value === "static",
+        peak_drawdown_stop_pct: Number(elements.peakDrawdownStopInput.value),
+        dynamic_drawdown_stop_enabled: elements.drawdownStopModeInput.value === "dynamic",
+        dynamic_drawdown_activation_pct: Number(
+            elements.dynamicDrawdownActivationInput.value,
+        ),
+        dynamic_max_profit_giveback_pct: Number(
+            elements.dynamicMaxProfitGivebackInput.value,
+        ),
+        chandelier_exit_enabled: elements.chandelierExitEnabledInput.checked,
+        partial_take_profit_enabled:
+            elements.partialTakeProfitEnabledInput.checked,
+        cooldown_enabled: elements.cooldownEnabledInput.checked,
+        cooldown_hours: Number(elements.cooldownHoursInput.value),
+        candidate_scan_interval_seconds:
+            Math.round(Number(elements.scanIntervalInput.value) * 3600),
     };
+}
+
+function applyStrategyPreset(timeframe) {
+    const preset = STRATEGY_PRESETS[timeframe] || STRATEGY_PRESETS["1d"];
+    elements.lookbackDaysInput.value = preset.lookback_days;
+    elements.minChange20dInput.value = preset.min_change_20d;
+    elements.maxChange20dInput.value = preset.max_change_20d;
+    elements.maxDrawdownToGainRatioInput.value =
+        preset.max_drawdown_to_gain_ratio_pct;
+    elements.useMa99FilterInput.checked = preset.use_ma99_filter;
+    elements.ma7ReclaimEnabledInput.checked = preset.ma7_reclaim_enabled;
+    elements.ma7ReclaimToleranceInput.value =
+        preset.ma7_reclaim_tolerance_pct;
+    elements.ma7ReclaimLookbackInput.value =
+        preset.ma7_reclaim_lookback_days;
+    elements.ma7ExitThresholdInput.value = preset.ma7_exit_threshold_pct;
+    elements.hardStoplossInput.value = preset.hard_stoploss_pct;
+    elements.drawdownStopModeInput.value =
+        preset.dynamic_drawdown_stop_enabled ? "dynamic" : "off";
+    elements.dynamicDrawdownActivationInput.value =
+        preset.dynamic_drawdown_activation_pct;
+    elements.dynamicMaxProfitGivebackInput.value =
+        preset.dynamic_max_profit_giveback_pct;
+    elements.chandelierExitEnabledInput.checked =
+        preset.chandelier_exit_enabled;
+    elements.partialTakeProfitEnabledInput.checked =
+        preset.partial_take_profit_enabled;
+    elements.drawdownProtectionDetails.open =
+        preset.dynamic_drawdown_stop_enabled;
+    elements.advancedExitDetails.open =
+        preset.chandelier_exit_enabled || preset.partial_take_profit_enabled;
+    elements.cooldownEnabledInput.checked = preset.cooldown_enabled;
+    elements.cooldownHoursInput.value = preset.cooldown_hours;
+    elements.scanIntervalInput.value = preset.candidate_scan_interval_hours;
+    updateFilterRuleValues();
+    markSettingsDirty();
 }
 
 function updateFilterRuleValues() {
@@ -247,10 +531,45 @@ function updateFilterRuleValues() {
     const lookbackDays = Number(elements.lookbackDaysInput.value);
     const minChange = Number(elements.minChange20dInput.value);
     const maxChange = Number(elements.maxChange20dInput.value);
-    const maxDrawdown = Number(elements.maxDrawdownInput.value);
+    const maxDrawdownToGainRatio = Number(
+        elements.maxDrawdownToGainRatioInput.value,
+    );
     const ma7ExitThreshold = Number(elements.ma7ExitThresholdInput.value);
     const hardStoploss = Number(elements.hardStoplossInput.value);
-    const maTimeframe = elements.use4hMaFilterInput.checked ? "4h" : "日K";
+    const noProgressExitEnabled = elements.noProgressExitEnabledInput.checked;
+    const drawdownStopMode = elements.drawdownStopModeInput.value;
+    const peakDrawdownStopEnabled = drawdownStopMode === "static";
+    const peakDrawdownStop = Number(elements.peakDrawdownStopInput.value);
+    const dynamicDrawdownStopEnabled = drawdownStopMode === "dynamic";
+    elements.staticDrawdownSetting.classList.toggle(
+        "is-hidden",
+        drawdownStopMode !== "static",
+    );
+    elements.dynamicDrawdownSetting.classList.toggle(
+        "is-hidden",
+        drawdownStopMode !== "dynamic",
+    );
+    elements.dynamicProfitGivebackSetting.classList.toggle(
+        "is-hidden",
+        drawdownStopMode !== "dynamic",
+    );
+    const dynamicDrawdownActivation = Number(
+        elements.dynamicDrawdownActivationInput.value,
+    );
+    const dynamicMaxProfitGiveback = Number(
+        elements.dynamicMaxProfitGivebackInput.value,
+    );
+    const chandelierExitEnabled = elements.chandelierExitEnabledInput.checked;
+    const partialTakeProfitEnabled =
+        elements.partialTakeProfitEnabledInput.checked;
+    const cooldownEnabled = elements.cooldownEnabledInput.checked;
+    const candidateReentryRequired =
+        elements.candidateReentryRequiredInput.checked;
+    const cooldownHours = Number(elements.cooldownHoursInput.value);
+    const maTimeframe =
+        elements.strategyTimeframeInput.value === "4h" ? "4h" : "日K";
+    elements.ma7ReclaimLookbackUnit.textContent =
+        elements.strategyTimeframeInput.value === "4h" ? "根4h K线" : "日";
     const lookbackText = Number.isInteger(lookbackDays)
         ? `${lookbackDays}日`
         : "--日";
@@ -260,11 +579,22 @@ function updateFilterRuleValues() {
     elements.maxChangeRule.textContent = Number.isFinite(maxChange)
         ? `${maxChange}%`
         : "--";
-    elements.maxDrawdownRule.textContent = Number.isFinite(maxDrawdown)
-        ? `${maxDrawdown}%`
+    elements.maxDrawdownToGainRatioRule.textContent = Number.isFinite(
+        maxDrawdownToGainRatio,
+    )
+        ? `${maxDrawdownToGainRatio}%`
         : "--";
-    elements.maFilterTimeframeLabel.textContent = maTimeframe;
     elements.maFilterRule.textContent = maTimeframe;
+    elements.ma7ExitThresholdTimeframe.textContent = maTimeframe;
+    elements.ma7ExitRuleTimeframe.textContent = maTimeframe;
+    const useMa99Filter = elements.useMa99FilterInput.checked;
+    elements.ma99FilterLabel.textContent = useMa99Filter ? "开启" : "关闭";
+    elements.ma99RuleSuffix.hidden = !useMa99Filter;
+    elements.ma99RuleSuffix.textContent = useMa99Filter
+        ? " > MA99 且 MA99斜率 > 0"
+        : "";
+    elements.ma7ReclaimEnabledLabel.textContent =
+        elements.ma7ReclaimEnabledInput.checked ? "开启" : "关闭";
     elements.lookbackDaysTexts.forEach((element) => {
         element.textContent = lookbackText;
     });
@@ -276,6 +606,85 @@ function updateFilterRuleValues() {
     elements.hardStoplossRule.textContent = Number.isFinite(hardStoploss)
         ? `${hardStoploss}%`
         : "--";
+    elements.noProgressExitEnabledLabel.textContent =
+        noProgressExitEnabled ? "开启" : "关闭";
+    elements.noProgressExitRule.textContent =
+        `持仓 12 小时最高盈利未达到 2% 时卖出（${
+            noProgressExitEnabled ? "开启" : "关闭"
+        }）`;
+    elements.noProgressExitRule.classList.toggle(
+        "is-hidden",
+        !noProgressExitEnabled,
+    );
+    const peakDrawdownText = Number.isFinite(peakDrawdownStop)
+        ? `${peakDrawdownStop}%`
+        : "--";
+    elements.peakDrawdownStopRule.textContent =
+        `固定最高价回撤超过 ${peakDrawdownText} 时卖出（${
+            peakDrawdownStopEnabled ? "开启" : "关闭"
+        }）`;
+    elements.dynamicDrawdownActivationRule.textContent = Number.isFinite(
+        dynamicDrawdownActivation,
+    )
+        ? `${dynamicDrawdownActivation}%`
+        : "--";
+    elements.dynamicDrawdownStopRule.textContent =
+        `动态止损：盈利达到 ${Number.isFinite(dynamicDrawdownActivation)
+            ? `${dynamicDrawdownActivation}%`
+            : "--"} 后启动，锁定最高盈利的 50%，最多回吐 ${
+            Number.isFinite(dynamicMaxProfitGiveback)
+                ? `${dynamicMaxProfitGiveback}%`
+                : "--"
+        }（${
+            dynamicDrawdownStopEnabled ? "开启" : "关闭"
+        }）`;
+    elements.peakDrawdownStopRule.classList.toggle(
+        "is-hidden",
+        !peakDrawdownStopEnabled,
+    );
+    elements.dynamicDrawdownStopRule.classList.toggle(
+        "is-hidden",
+        !dynamicDrawdownStopEnabled,
+    );
+    elements.chandelierExitEnabledLabel.textContent =
+        chandelierExitEnabled ? "开启" : "关闭";
+    elements.chandelierExitRule.textContent =
+        `吊灯止损：最高价 - ATR(22) × 3（${
+            chandelierExitEnabled ? "开启" : "关闭"
+        }）`;
+    elements.partialTakeProfitEnabledLabel.textContent =
+        partialTakeProfitEnabled ? "开启" : "关闭";
+    elements.partialTakeProfitRule.textContent =
+        `分批止盈：盈利15%减半仓，剩余仓位回撤5%卖出（${
+            partialTakeProfitEnabled ? "开启" : "关闭"
+        }）`;
+    elements.cooldownEnabledLabel.textContent = cooldownEnabled ? "开启" : "关闭";
+    elements.cooldownDurationSetting.classList.toggle(
+        "is-hidden",
+        !cooldownEnabled,
+    );
+    elements.cooldownRuleValue.textContent = Number.isFinite(cooldownHours)
+        ? `${cooldownHours}小时`
+        : "--";
+    elements.cooldownRule.textContent =
+        `卖出后同一币种冷却 ${Number.isFinite(cooldownHours)
+            ? `${cooldownHours}小时`
+            : "--"}（${cooldownEnabled ? "开启" : "关闭"}）`;
+    elements.cooldownRule.classList.toggle("is-hidden", !cooldownEnabled);
+    elements.candidateReentryRequiredLabel.textContent =
+        candidateReentryRequired ? "开启" : "关闭";
+    elements.candidateReentryRequiredRule.textContent =
+        `卖出后需退出候选池并重新入选才允许买入（${
+            candidateReentryRequired ? "开启" : "关闭"
+        }）`;
+    elements.candidateReentryRequiredRule.classList.toggle(
+        "is-hidden",
+        !candidateReentryRequired,
+    );
+    elements.cooldownRuleSection.classList.toggle(
+        "is-hidden",
+        !cooldownEnabled && !candidateReentryRequired,
+    );
     elements.entryEnabledLabel.textContent = entryEnabled ? "允许" : "禁止";
     elements.entryEnabledBadge.textContent = entryEnabled ? "允许买入" : "仅允许卖出";
     elements.entryEnabledRule.textContent = entryEnabled
@@ -287,9 +696,25 @@ async function saveSettings() {
     const lookbackDays = Number(elements.lookbackDaysInput.value);
     const minChange20d = Number(elements.minChange20dInput.value);
     const maxChange20d = Number(elements.maxChange20dInput.value);
-    const maxDrawdown20d = Number(elements.maxDrawdownInput.value);
+    const maxDrawdownToGainRatio = Number(
+        elements.maxDrawdownToGainRatioInput.value,
+    );
     const ma7ExitThreshold = Number(elements.ma7ExitThresholdInput.value);
     const hardStoploss = Number(elements.hardStoplossInput.value);
+    const ma7ReclaimTolerance = Number(
+        elements.ma7ReclaimToleranceInput.value,
+    );
+    const ma7ReclaimLookback = Number(
+        elements.ma7ReclaimLookbackInput.value,
+    );
+    const peakDrawdownStop = Number(elements.peakDrawdownStopInput.value);
+    const dynamicDrawdownActivation = Number(
+        elements.dynamicDrawdownActivationInput.value,
+    );
+    const dynamicMaxProfitGiveback = Number(
+        elements.dynamicMaxProfitGivebackInput.value,
+    );
+    const cooldownHours = Number(elements.cooldownHoursInput.value);
     if (!Number.isInteger(lookbackDays) || lookbackDays < 2 || lookbackDays > 364) {
         elements.settingsStatus.textContent = "统计周期请输入 2～364 的整数";
         return;
@@ -306,8 +731,12 @@ async function saveSettings() {
         elements.settingsStatus.textContent = "最大涨幅必须大于最小涨幅";
         return;
     }
-    if (!Number.isFinite(maxDrawdown20d) || maxDrawdown20d < 0 || maxDrawdown20d > 100) {
-        elements.settingsStatus.textContent = "回撤请输入 0～100";
+    if (
+        !Number.isFinite(maxDrawdownToGainRatio)
+        || maxDrawdownToGainRatio < 0
+        || maxDrawdownToGainRatio > 100
+    ) {
+        elements.settingsStatus.textContent = "回撤/涨幅比例请输入 0～100";
         return;
     }
     if (
@@ -320,6 +749,68 @@ async function saveSettings() {
     }
     if (!Number.isFinite(hardStoploss) || hardStoploss < 0.1 || hardStoploss > 99) {
         elements.settingsStatus.textContent = "硬止损请输入 0.1～99";
+        return;
+    }
+    if (
+        !Number.isFinite(ma7ReclaimTolerance)
+        || ma7ReclaimTolerance < 0.1
+        || ma7ReclaimTolerance > 5
+    ) {
+        elements.settingsStatus.textContent = "MA7 回踩容差请输入 0.1～5";
+        return;
+    }
+    if (
+        !Number.isInteger(ma7ReclaimLookback)
+        || ma7ReclaimLookback < 1
+        || ma7ReclaimLookback > 5
+    ) {
+        elements.settingsStatus.textContent = "回捞窗口请输入 1～5 根K线整数";
+        return;
+    }
+    if (
+        !Number.isFinite(peakDrawdownStop)
+        || peakDrawdownStop < 0.1
+        || peakDrawdownStop > 99
+    ) {
+        elements.settingsStatus.textContent = "最高点回撤比例请输入 0.1～99";
+        return;
+    }
+    if (
+        !Number.isFinite(dynamicDrawdownActivation)
+        || dynamicDrawdownActivation < 0.1
+        || dynamicDrawdownActivation > 100
+    ) {
+        elements.settingsStatus.textContent = "动态止损启动盈利请输入 0.1～100";
+        return;
+    }
+    if (
+        !Number.isFinite(dynamicMaxProfitGiveback)
+        || dynamicMaxProfitGiveback < 0.5
+        || dynamicMaxProfitGiveback > 50
+    ) {
+        elements.settingsStatus.textContent = "最大盈利回吐请输入 0.5～50";
+        return;
+    }
+    if (
+        !Number.isFinite(cooldownHours)
+        || cooldownHours < 0.1
+        || cooldownHours > 168
+    ) {
+        elements.settingsStatus.textContent = "冷却时长请输入 0.1～168 小时";
+        return;
+    }
+    const scanIntervalHours = Number(elements.scanIntervalInput.value);
+    if (
+        !Number.isFinite(scanIntervalHours)
+        || scanIntervalHours < 0.1
+        || scanIntervalHours > 24
+    ) {
+        elements.settingsStatus.textContent = "扫描频率请输入 0.1～24 小时";
+        return;
+    }
+    const maxOpenTrades = Number(elements.maxOpenTradesInput.value);
+    if (!Number.isInteger(maxOpenTrades) || maxOpenTrades < 1 || maxOpenTrades > 4) {
+        elements.settingsStatus.textContent = "最大持仓数量请输入 1～4 的整数";
         return;
     }
 
@@ -343,12 +834,637 @@ async function saveSettings() {
     }
 }
 
+function formatBacktestDate(value) {
+    if (!value) return "--";
+    return new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    }).format(new Date(value));
+}
+
+function formatBacktestPrice(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        return "--";
+    }
+    return formatPrice(value);
+}
+
+function formatBacktestAmount(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        return "--";
+    }
+    return `${Number(value).toFixed(2)} USDT`;
+}
+
+function formatBacktestMonth(value) {
+    if (!value) return "--";
+    return new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+    }).format(new Date(value));
+}
+
+function calculateMonthlyReturns(curve) {
+    const points = (curve || [])
+        .map((point) => ({
+            time: point.time,
+            date: new Date(point.time),
+            equity: Number(point.equity),
+        }))
+        .filter(
+            (point) => point.time
+                && !Number.isNaN(point.date.getTime())
+                && Number.isFinite(point.equity),
+        );
+    const months = [];
+    let current = null;
+    let previousPoint = null;
+
+    points.forEach((point) => {
+        const key = `${point.date.getFullYear()}-${String(
+            point.date.getMonth() + 1,
+        ).padStart(2, "0")}`;
+        if (!current || current.key !== key) {
+            if (current) months.push(current);
+            current = {
+                key,
+                label: formatBacktestMonth(point.time),
+                startEquity: previousPoint?.equity ?? point.equity,
+                endEquity: point.equity,
+            };
+        }
+        current.endEquity = point.equity;
+        previousPoint = point;
+    });
+    if (current) months.push(current);
+
+    return months.map((month) => ({
+        ...month,
+        returnPct: month.startEquity
+            ? (month.endEquity / month.startEquity - 1) * 100
+            : 0,
+    }));
+}
+
+function renderMonthlyReturns(curve) {
+    const rows = calculateMonthlyReturns(curve);
+    elements.monthlyReturnsBody.innerHTML = "";
+    if (!rows.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 4;
+        cell.textContent = "暂无月度收益数据";
+        row.append(cell);
+        elements.monthlyReturnsBody.append(row);
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    rows.forEach((month) => {
+        const row = document.createElement("tr");
+        const values = [
+            month.label,
+            formatBacktestAmount(month.startEquity),
+            formatBacktestAmount(month.endEquity),
+            `${month.returnPct >= 0 ? "+" : ""}${month.returnPct.toFixed(2)}%`,
+        ];
+        values.forEach((value, index) => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            if (index === 3) {
+                cell.className = month.returnPct >= 0 ? "positive" : "negative";
+            }
+            row.append(cell);
+        });
+        fragment.append(row);
+    });
+    elements.monthlyReturnsBody.append(fragment);
+}
+
+function backtestExitReason(reason) {
+    const reasons = {
+        dynamic_peak_drawdown: "动态锁盈",
+        no_progress_12h: "无进展",
+        stop_loss: "止损",
+        break_even_stop: "保本止损",
+        peak_drawdown: "最高点回撤",
+        take_profit: "固定止盈",
+        ema20_exit: "EMA20",
+        time_exit: "最长持仓",
+        ma7_exit: "MA7",
+        "1d_ma7_buffer_break": "日K MA7",
+        "4h_ma7_buffer_break": "4h MA7",
+        chandelier_exit: "吊灯止损",
+        partial_trailing_stop: "分批止盈后移动止损",
+        end_of_backtest: "区间结束",
+    };
+    return reasons[reason] || reason || "--";
+}
+
+function appendBacktestTradeRows() {
+    const trades = state.backtestTrades;
+    const start = state.backtestVisibleTradeCount;
+    const end = Math.min(start + BACKTEST_TRADE_PAGE_SIZE, trades.length);
+    if (start >= end) return;
+    const fragment = document.createDocumentFragment();
+    trades.slice(start, end).forEach((trade) => {
+        const row = document.createElement("tr");
+        const entryAmount = trade.entry_amount ?? trade.stake;
+        const exitAmount = trade.exit_amount
+            ?? (
+                Number.isFinite(Number(trade.profit_abs))
+                    ? Number(entryAmount) + Number(trade.profit_abs)
+                    : null
+            );
+        const exitReason = trade.partial_take_profit
+            ? `15%减半仓 · ${backtestExitReason(trade.exit_reason)}`
+            : backtestExitReason(trade.exit_reason);
+        const values = [
+            trade.pair,
+            formatBacktestDate(trade.entry_time),
+            formatBacktestPrice(trade.entry_price),
+            formatBacktestAmount(entryAmount),
+            formatBacktestDate(trade.exit_time),
+            formatBacktestPrice(trade.exit_price),
+            formatBacktestAmount(exitAmount),
+            `${trade.profit_pct >= 0 ? "+" : ""}${trade.profit_pct.toFixed(2)}%`,
+            exitReason,
+        ];
+        values.forEach((value, index) => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            if (index === 7) {
+                cell.className = trade.profit_pct >= 0 ? "positive" : "negative";
+            }
+            row.append(cell);
+        });
+        fragment.append(row);
+    });
+    elements.backtestTradesBody.append(fragment);
+    state.backtestVisibleTradeCount = end;
+    const candidateCount =
+        state.backtestResult?.summary?.candidate_pair_count || 0;
+    elements.backtestTradeMeta.textContent =
+        `已加载 ${end}/${trades.length} 笔 · ${candidateCount} 个候选`;
+}
+
+function renderBacktestTrades(trades) {
+    state.backtestTrades = trades || [];
+    state.backtestVisibleTradeCount = 0;
+    elements.backtestTradesBody.innerHTML = "";
+    elements.backtestTableWrap.scrollTop = 0;
+    if (!state.backtestTrades.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 9;
+        cell.textContent = "回测区间内没有完成交易";
+        row.append(cell);
+        elements.backtestTradesBody.append(row);
+        elements.backtestTradeMeta.textContent = "0 笔交易";
+        return;
+    }
+    appendBacktestTradeRows();
+}
+
+function loadMoreBacktestTrades() {
+    const container = elements.backtestTableWrap;
+    if (
+        state.backtestVisibleTradeCount < state.backtestTrades.length
+        && container.scrollTop + container.clientHeight
+            >= container.scrollHeight - 80
+    ) {
+        appendBacktestTradeRows();
+    }
+}
+
+function maxDrawdownSegment(curve) {
+    let peakIndex = 0;
+    let peakEquity = Number(curve[0]?.equity);
+    let maxDrawdown = 0;
+    let segment = null;
+
+    curve.forEach((point, index) => {
+        const equity = Number(point.equity);
+        if (!Number.isFinite(equity)) return;
+        if (!Number.isFinite(peakEquity) || equity > peakEquity) {
+            peakEquity = equity;
+            peakIndex = index;
+            return;
+        }
+        const drawdown = peakEquity ? (peakEquity - equity) / peakEquity : 0;
+        if (drawdown > maxDrawdown) {
+            maxDrawdown = drawdown;
+            segment = { peakIndex, troughIndex: index };
+        }
+    });
+    return segment;
+}
+
+function backtestEquityGeometry(rect, curve) {
+    const left = 54;
+    const right = 16;
+    const top = 18;
+    const bottom = 30;
+    const width = Math.max(1, rect.width - left - right);
+    const height = Math.max(1, rect.height - top - bottom);
+    const values = curve.map((point) => Number(point.equity));
+    let minValue = Math.min(...values);
+    let maxValue = Math.max(...values);
+    const padding = Math.max((maxValue - minValue) * 0.12, maxValue * 0.002, 1);
+    minValue -= padding;
+    maxValue += padding;
+    const valueRange = maxValue - minValue;
+    return {
+        left,
+        top,
+        width,
+        height,
+        values,
+        minValue,
+        maxValue,
+        valueRange,
+        xForIndex: (index) => left + (index / (curve.length - 1)) * width,
+        yForValue: (value) => top + ((maxValue - value) / valueRange) * height,
+    };
+}
+
+function drawBacktestEquity() {
+    const canvas = elements.backtestEquityCanvas;
+    const curve = state.backtestResult?.equity_curve || [];
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const ratio = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, rect.width, rect.height);
+    if (curve.length < 2) return;
+    const {
+        left,
+        top,
+        width,
+        height,
+        values,
+        maxValue,
+        valueRange,
+        xForIndex,
+        yForValue,
+    } = backtestEquityGeometry(rect, curve);
+
+    context.strokeStyle = COLORS.grid;
+    context.fillStyle = COLORS.axis;
+    context.font = "9px Inter, sans-serif";
+    context.lineWidth = 1;
+    for (let index = 0; index <= 4; index += 1) {
+        const y = top + (height * index) / 4;
+        context.beginPath();
+        context.moveTo(left, y);
+        context.lineTo(left + width, y);
+        context.stroke();
+        const label = maxValue - (valueRange * index) / 4;
+        context.fillText(label.toFixed(0), 8, y + 3);
+    }
+
+    const lineColor = values.at(-1) >= values[0] ? COLORS.up : COLORS.down;
+    context.strokeStyle = lineColor;
+    context.lineWidth = 2;
+    context.beginPath();
+    curve.forEach((point, index) => {
+        const x = xForIndex(index);
+        const y = yForValue(Number(point.equity));
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+    });
+    context.stroke();
+
+    context.fillStyle = `${lineColor}18`;
+    context.lineTo(left + width, top + height);
+    context.lineTo(left, top + height);
+    context.closePath();
+    context.fill();
+
+    const drawdownSegment = maxDrawdownSegment(curve);
+    if (drawdownSegment && drawdownSegment.troughIndex > drawdownSegment.peakIndex) {
+        context.save();
+        context.strokeStyle = COLORS.down;
+        context.lineWidth = 3;
+        context.beginPath();
+        for (
+            let index = drawdownSegment.peakIndex;
+            index <= drawdownSegment.troughIndex;
+            index += 1
+        ) {
+            const x = xForIndex(index);
+            const y = yForValue(Number(curve[index].equity));
+            if (index === drawdownSegment.peakIndex) context.moveTo(x, y);
+            else context.lineTo(x, y);
+        }
+        context.stroke();
+        [drawdownSegment.peakIndex, drawdownSegment.troughIndex].forEach((index) => {
+            context.beginPath();
+            context.arc(
+                xForIndex(index),
+                yForValue(Number(curve[index].equity)),
+                4,
+                0,
+                Math.PI * 2,
+            );
+            context.fillStyle = "#ffffff";
+            context.fill();
+            context.stroke();
+        });
+        context.restore();
+    }
+
+    if (
+        Number.isInteger(state.backtestHoverIndex)
+        && state.backtestHoverIndex >= 0
+        && state.backtestHoverIndex < curve.length
+    ) {
+        const hoverPoint = curve[state.backtestHoverIndex];
+        const hoverX = xForIndex(state.backtestHoverIndex);
+        const hoverY = yForValue(Number(hoverPoint.equity));
+        context.save();
+        context.strokeStyle = COLORS.crosshair;
+        context.lineWidth = 1;
+        context.setLineDash([4, 4]);
+        context.beginPath();
+        context.moveTo(hoverX, top);
+        context.lineTo(hoverX, top + height);
+        context.stroke();
+        context.setLineDash([]);
+        context.fillStyle = "#ffffff";
+        context.strokeStyle = lineColor;
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(hoverX, hoverY, 4, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+        context.restore();
+    }
+
+    context.fillStyle = COLORS.axis;
+    context.textAlign = "left";
+    context.fillText(formatBacktestDate(curve[0].time), left, rect.height - 9);
+    context.textAlign = "right";
+    context.fillText(
+        formatBacktestDate(curve.at(-1).time),
+        left + width,
+        rect.height - 9,
+    );
+    context.textAlign = "left";
+}
+
+function updateBacktestEquityHover(clientX) {
+    const curve = state.backtestResult?.equity_curve || [];
+    if (curve.length < 2) return;
+    const canvas = elements.backtestEquityCanvas;
+    const rect = canvas.getBoundingClientRect();
+    const geometry = backtestEquityGeometry(rect, curve);
+    const relativeX = Math.max(
+        0,
+        Math.min(geometry.width, clientX - rect.left - geometry.left),
+    );
+    const index = Math.round(
+        (relativeX / geometry.width) * (curve.length - 1),
+    );
+    const point = curve[index];
+    const equity = Number(point.equity);
+    const initialBalance = Number(
+        state.backtestResult?.summary?.initial_balance || 0,
+    );
+    const profitPct = initialBalance
+        ? (equity / initialBalance - 1) * 100
+        : 0;
+    const pointX = geometry.xForIndex(index);
+    const pointY = geometry.yForValue(equity);
+    const tooltip = elements.backtestEquityTooltip;
+
+    state.backtestHoverIndex = index;
+    tooltip.innerHTML = "";
+    const value = document.createElement("strong");
+    value.textContent = `${equity.toFixed(2)} USDT`;
+    const time = document.createElement("span");
+    time.textContent = formatBacktestDate(point.time);
+    const profit = document.createElement("b");
+    profit.className = profitPct >= 0 ? "positive" : "negative";
+    profit.textContent = `${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%`;
+    tooltip.append(value, time, profit);
+    tooltip.style.display = "block";
+
+    const tooltipWidth = 142;
+    const tooltipHeight = 58;
+    tooltip.style.left = `${Math.max(
+        8,
+        Math.min(rect.width - tooltipWidth - 8, pointX + 10),
+    )}px`;
+    tooltip.style.top = `${Math.max(
+        8,
+        Math.min(rect.height - tooltipHeight - 8, pointY - tooltipHeight / 2),
+    )}px`;
+    drawBacktestEquity();
+}
+
+function clearBacktestEquityHover() {
+    state.backtestHoverIndex = null;
+    elements.backtestEquityTooltip.style.display = "none";
+    drawBacktestEquity();
+}
+
+function renderBacktestResult(result) {
+    if (!result?.summary) return;
+    const previousResultId = state.backtestResult?.meta?.generated_at;
+    const resultId = result.meta?.generated_at;
+    const resultChanged = previousResultId !== resultId;
+    state.backtestResult = result;
+    state.backtestHoverIndex = null;
+    elements.backtestEquityTooltip.style.display = "none";
+    const summary = result.summary;
+    const profit = Number(summary.total_profit_pct);
+    elements.backtestTotalProfit.textContent =
+        `${profit >= 0 ? "+" : ""}${profit.toFixed(2)}%`;
+    elements.backtestTotalProfit.className = profit >= 0 ? "positive" : "negative";
+    elements.backtestEndingBalance.textContent =
+        `${Number(summary.ending_balance).toFixed(2)} USDT`;
+    elements.backtestMaxDrawdown.textContent =
+        `${Number(summary.max_drawdown_pct).toFixed(2)}%`;
+    elements.backtestMaxDrawdown.className =
+        Number(summary.max_drawdown_pct) > 0 ? "negative" : "";
+    elements.backtestWinRate.textContent =
+        `${Number(summary.win_rate_pct).toFixed(2)}%`;
+    elements.backtestTradeCount.textContent = String(summary.trade_count);
+    elements.backtestProfitFactor.textContent =
+        summary.profit_factor === null ? "--" : Number(summary.profit_factor).toFixed(2);
+    elements.backtestDateRange.textContent =
+        `${formatBacktestDate(summary.start)} 至 ${formatBacktestDate(summary.end)}`;
+    elements.backtestStatusMeta.textContent =
+        result.meta.execution_timeframe === "4h"
+            ? `${result.meta.days || "--"} 天 · 4h策略 · 4h成交`
+            : `${result.meta.days || "--"} 天 · 30 分钟选股 · 15 分钟成交`;
+    elements.backtestUniverseMeta.textContent =
+        `${result.meta.processed_pairs}/${result.meta.universe_size} 个交易对 · ${
+            result.meta.scan_timeframe
+        } 选股`;
+    elements.backtestEmpty.style.display =
+        result.equity_curve?.length > 1 ? "none" : "grid";
+    renderMonthlyReturns(result.equity_curve || []);
+    if (resultChanged) {
+        renderBacktestTrades(result.trades || []);
+    }
+    requestAnimationFrame(drawBacktestEquity);
+}
+
+function applyBacktestStatus(status) {
+    const progress = Number(status.progress || 0);
+    elements.backtestStatusText.textContent = status.message || "尚未运行回测";
+    elements.backtestProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+    elements.backtestProgressText.textContent = `${progress.toFixed(0)}%`;
+    elements.runBacktestButton.disabled = Boolean(status.running);
+    elements.runBacktestButton.textContent = status.running ? "回测运行中" : "运行回测";
+    elements.cancelBacktestButton.classList.toggle(
+        "is-hidden",
+        !status.running,
+    );
+    if (status.result) renderBacktestResult(status.result);
+}
+
+async function loadBacktestStatus() {
+    try {
+        const status = await fetchJson("/api/backtest/status");
+        applyBacktestStatus(status);
+        if (status.running && !state.backtestPollTimer) {
+            state.backtestPollTimer = window.setInterval(loadBacktestStatus, 2000);
+        }
+        if (!status.running && state.backtestPollTimer) {
+            window.clearInterval(state.backtestPollTimer);
+            state.backtestPollTimer = null;
+        }
+    } catch (error) {
+        elements.backtestStatusText.textContent = `读取失败：${error.message}`;
+        elements.runBacktestButton.disabled = false;
+    }
+}
+
+async function startBacktest() {
+    const days = Number(elements.backtestDaysInput.value);
+    const initialBalance = Number(elements.backtestInitialBalanceInput.value);
+    if (!Number.isInteger(days) || days < 7 || days > 540) {
+        elements.backtestStatusText.textContent = "回测区间必须为 7～540 天";
+        return;
+    }
+    if (
+        !Number.isFinite(initialBalance)
+        || initialBalance < 100
+        || initialBalance > 10000000
+    ) {
+        elements.backtestStatusText.textContent = "初始资金请输入 100～10000000";
+        return;
+    }
+    elements.runBacktestButton.disabled = true;
+    elements.backtestStatusText.textContent = "正在启动回测...";
+    const strategyTimeframe = elements.strategyTimeframeInput.value;
+    elements.backtestStatusMeta.textContent =
+        strategyTimeframe === "4h"
+            ? `${days} 天 · 4h策略 · 4h成交`
+            : `${days} 天 · 30 分钟选股 · 15 分钟成交`;
+    try {
+        const status = await fetchJson("/api/backtest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                days,
+                initial_balance: initialBalance,
+                strategy_timeframe: strategyTimeframe,
+            }),
+        });
+        applyBacktestStatus(status);
+        if (!state.backtestPollTimer) {
+            state.backtestPollTimer = window.setInterval(loadBacktestStatus, 2000);
+        }
+    } catch (error) {
+        elements.backtestStatusText.textContent = `启动失败：${error.message}`;
+        elements.runBacktestButton.disabled = false;
+    }
+}
+
+async function cancelBacktest() {
+    elements.cancelBacktestButton.disabled = true;
+    try {
+        const status = await fetchJson("/api/backtest", {
+            method: "DELETE",
+        });
+        applyBacktestStatus(status);
+        if (state.backtestPollTimer) {
+            window.clearInterval(state.backtestPollTimer);
+            state.backtestPollTimer = null;
+        }
+    } catch (error) {
+        elements.backtestStatusText.textContent = `停止失败：${error.message}`;
+    } finally {
+        elements.cancelBacktestButton.disabled = false;
+    }
+}
+
 function filterCandidates() {
     const keyword = elements.searchInput.value.trim().toUpperCase();
     state.filteredCandidates = state.candidates.filter((candidate) =>
         candidate.pair.toUpperCase().includes(keyword),
     );
+    sortCandidates(state.filteredCandidates);
     renderCandidateList();
+}
+
+// Sort keys map to a candidate field plus a direction. Missing values (null)
+// always sink to the bottom regardless of direction so incomplete rows never
+// crowd out the meaningful ones. "default" keeps the backend rank order.
+const SORT_OPTIONS = {
+    change_desc: { field: "change_20d", direction: -1 },
+    change_asc: { field: "change_20d", direction: 1 },
+    drawdown_desc: { field: "drawdown_20d", direction: -1 },
+    drawdown_asc: { field: "drawdown_20d", direction: 1 },
+};
+
+function sortCandidates(candidates) {
+    const option = SORT_OPTIONS[state.sortKey];
+    if (!option) {
+        candidates.sort((a, b) => a.rank - b.rank);
+        return;
+    }
+    candidates.sort((a, b) => {
+        const valueA = a[option.field];
+        const valueB = b[option.field];
+        const missingA = valueA === null || valueA === undefined;
+        const missingB = valueB === null || valueB === undefined;
+        if (missingA && missingB) return a.rank - b.rank;
+        if (missingA) return 1;
+        if (missingB) return -1;
+        if (valueA === valueB) return a.rank - b.rank;
+        return (valueA - valueB) * option.direction;
+    });
+}
+
+// The row subline surfaces whatever metric the list is sorted by, so the
+// ordering is legible at a glance. Falls back to 24h volume for the default
+// sort.
+function candidateSubline(candidate) {
+    const option = SORT_OPTIONS[state.sortKey];
+    if (option && option.field === "change_20d") {
+        const value = candidate.change_20d;
+        return value === null || value === undefined
+            ? "涨幅 --"
+            : `${value >= 0 ? "+" : ""}${value.toFixed(2)}% 涨幅`;
+    }
+    if (option && option.field === "drawdown_20d") {
+        const value = candidate.drawdown_20d;
+        return value === null || value === undefined
+            ? "回撤 --"
+            : `-${value.toFixed(2)}% 回撤`;
+    }
+    return `24h ${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
 }
 
 function renderCandidateList() {
@@ -379,7 +1495,7 @@ function renderCandidateList() {
         symbol.textContent = candidate.pair;
         const volume = document.createElement("span");
         volume.className = "pair-volume";
-        volume.textContent = `24h ${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
+        volume.textContent = candidateSubline(candidate);
         identity.append(symbol, volume);
 
         const price = document.createElement("span");
@@ -423,10 +1539,28 @@ async function loadChart({ resetView = false, forceRefresh = false } = {}) {
     const pair = state.selectedPair;
     if (!pair) return;
 
+    const cacheKey = `${pair}|${state.timeframe}`;
+    const cached = state.candleCache.get(cacheKey);
+    const now = Date.now();
+
+    // Instant paint from cache so switching timeframe / re-selecting a pair
+    // feels immediate. If the cache is still fresh we skip the network round
+    // trip entirely; otherwise we repaint from cache first and revalidate in
+    // the background without showing the loading state.
+    if (cached && !forceRefresh) {
+        applyCandlePayload(cached.payload, { resetView });
+        if (now - cached.ts < CANDLE_CACHE_TTL_MS) {
+            return true;
+        }
+    }
+
     const requestId = ++state.chartRequest;
-    elements.chartLoading.textContent = "正在加载 K 线...";
-    elements.chartLoading.classList.remove("hidden");
-    elements.chartTooltip.style.display = "none";
+    const showLoading = !cached || forceRefresh;
+    if (showLoading) {
+        elements.chartLoading.textContent = "正在加载 K 线...";
+        elements.chartLoading.classList.remove("hidden");
+        elements.chartTooltip.style.display = "none";
+    }
 
     try {
         const params = new URLSearchParams({
@@ -437,24 +1571,36 @@ async function loadChart({ resetView = false, forceRefresh = false } = {}) {
         if (forceRefresh) params.set("refresh", "true");
         const payload = await fetchJson(`/api/candles?${params}`);
         if (requestId !== state.chartRequest) return;
-        state.candles = payload.candles || [];
-        state.hoverIndex = null;
-        if (resetView || state.viewCount === null) {
-            resetChartView();
-        } else {
-            state.viewCount = Math.min(state.viewCount, state.candles.length);
-            state.viewEnd = state.candles.length;
-        }
-        updateChartMetrics();
-        drawChart();
+        state.candleCache.set(cacheKey, { payload, ts: Date.now() });
+        // A background revalidation must not reset the user's zoom/pan; only the
+        // first paint (no prior cache) honors resetView here.
+        applyCandlePayload(payload, { resetView: resetView && !cached });
         elements.chartLoading.classList.add("hidden");
         return true;
     } catch (error) {
         if (requestId !== state.chartRequest) return;
+        if (cached) {
+            // Keep the cached chart on screen; a transient refresh failure
+            // should not blank out a usable view.
+            return false;
+        }
         elements.chartLoading.textContent = `K 线加载失败：${error.message}`;
         elements.chartLoading.classList.remove("hidden");
         return false;
     }
+}
+
+function applyCandlePayload(payload, { resetView = false } = {}) {
+    state.candles = payload.candles || [];
+    state.hoverIndex = null;
+    if (resetView || state.viewCount === null) {
+        resetChartView();
+    } else {
+        state.viewCount = Math.min(state.viewCount, state.candles.length);
+        state.viewEnd = state.candles.length;
+    }
+    updateChartMetrics();
+    drawChart();
 }
 
 function updateChartMetrics() {
@@ -886,7 +2032,39 @@ function stopChartDrag() {
     elements.chartCard.classList.remove("dragging");
 }
 
+elements.settingsTabs.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-settings-tab]");
+    if (!tab) return;
+    activateSettingsTab(tab.dataset.settingsTab);
+});
+elements.settingsTabs.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        return;
+    }
+    event.preventDefault();
+    const tabs = Array.from(
+        elements.settingsTabs.querySelectorAll("[data-settings-tab]"),
+    );
+    const currentIndex = tabs.findIndex(
+        (tab) => tab.dataset.settingsTab === state.settingsTab,
+    );
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowLeft") {
+        nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    } else if (event.key === "ArrowRight") {
+        nextIndex = (currentIndex + 1) % tabs.length;
+    } else if (event.key === "Home") {
+        nextIndex = 0;
+    } else if (event.key === "End") {
+        nextIndex = tabs.length - 1;
+    }
+    activateSettingsTab(tabs[nextIndex].dataset.settingsTab, true);
+});
 elements.searchInput.addEventListener("input", filterCandidates);
+elements.sortSelect.addEventListener("change", () => {
+    state.sortKey = elements.sortSelect.value;
+    filterCandidates();
+});
 elements.entryEnabledInput.addEventListener("change", () => {
     updateFilterRuleValues();
     markSettingsDirty();
@@ -918,16 +2096,28 @@ elements.maxChange20dInput.addEventListener("keydown", (event) => {
         elements.maxChange20dInput.blur();
     }
 });
-elements.maxDrawdownInput.addEventListener("input", () => {
+elements.maxDrawdownToGainRatioInput.addEventListener("input", () => {
     updateFilterRuleValues();
     markSettingsDirty();
 });
-elements.maxDrawdownInput.addEventListener("keydown", (event) => {
+elements.maxDrawdownToGainRatioInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-        elements.maxDrawdownInput.blur();
+        elements.maxDrawdownToGainRatioInput.blur();
     }
 });
-elements.use4hMaFilterInput.addEventListener("change", () => {
+elements.useMa99FilterInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.ma7ReclaimEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.ma7ReclaimToleranceInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.ma7ReclaimLookbackInput.addEventListener("input", () => {
     updateFilterRuleValues();
     markSettingsDirty();
 });
@@ -944,10 +2134,79 @@ elements.hardStoplossInput.addEventListener("input", () => {
     updateFilterRuleValues();
     markSettingsDirty();
 });
+elements.noProgressExitEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.peakDrawdownStopInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.peakDrawdownStopInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.peakDrawdownStopInput.blur();
+    }
+});
+elements.drawdownStopModeInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.dynamicDrawdownActivationInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.dynamicDrawdownActivationInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.dynamicDrawdownActivationInput.blur();
+    }
+});
+elements.dynamicMaxProfitGivebackInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.dynamicMaxProfitGivebackInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.dynamicMaxProfitGivebackInput.blur();
+    }
+});
+elements.chandelierExitEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.partialTakeProfitEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.cooldownEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.candidateReentryRequiredInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.cooldownHoursInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.cooldownHoursInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.cooldownHoursInput.blur();
+    }
+});
 elements.hardStoplossInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
         elements.hardStoplossInput.blur();
     }
+});
+elements.scanIntervalInput.addEventListener("input", markSettingsDirty);
+elements.scanIntervalInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        elements.scanIntervalInput.blur();
+    }
+});
+elements.strategyTimeframeInput.addEventListener("change", (event) => {
+    applyStrategyPreset(event.target.value);
 });
 elements.saveSettingsButton.addEventListener("click", saveSettings);
 elements.refreshButton.addEventListener("click", startManualScan);
@@ -999,12 +2258,62 @@ elements.chartCanvas.addEventListener("mouseleave", () => {
     elements.chartTooltip.style.display = "none";
     drawChart();
 });
+elements.backtestEquityCanvas.addEventListener("mousemove", (event) => {
+    updateBacktestEquityHover(event.clientX);
+});
+elements.backtestEquityCanvas.addEventListener(
+    "touchstart",
+    (event) => {
+        if (!event.touches.length) return;
+        event.preventDefault();
+        updateBacktestEquityHover(event.touches[0].clientX);
+    },
+    { passive: false },
+);
+elements.backtestEquityCanvas.addEventListener(
+    "touchmove",
+    (event) => {
+        if (!event.touches.length) return;
+        event.preventDefault();
+        updateBacktestEquityHover(event.touches[0].clientX);
+    },
+    { passive: false },
+);
+elements.backtestEquityCanvas.addEventListener(
+    "mouseleave",
+    clearBacktestEquityHover,
+);
+elements.backtestTableWrap.addEventListener(
+    "scroll",
+    loadMoreBacktestTrades,
+);
 
 const resizeObserver = new ResizeObserver(() => drawChart());
 resizeObserver.observe(elements.chartCanvas.parentElement);
+const backtestResizeObserver = new ResizeObserver(() => drawBacktestEquity());
+backtestResizeObserver.observe(elements.backtestEquityCanvas.parentElement);
 
+elements.viewTabs.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-view]");
+    if (!button) return;
+    const showBacktest = button.dataset.view === "backtest";
+    elements.liveWorkspace.classList.toggle("is-hidden", showBacktest);
+    elements.backtestWorkspace.classList.toggle("is-hidden", !showBacktest);
+    elements.viewTabs.querySelectorAll("button").forEach((item) => {
+        item.classList.toggle("active", item === button);
+    });
+    if (showBacktest) {
+        loadBacktestStatus();
+        requestAnimationFrame(drawBacktestEquity);
+    }
+});
+elements.runBacktestButton.addEventListener("click", startBacktest);
+elements.cancelBacktestButton.addEventListener("click", cancelBacktest);
+
+initializeSettingsTabs();
 loadSettings();
 loadCandidates({ preserveSelection: false, reloadChart: true });
+loadBacktestStatus();
 setInterval(() => loadCandidates(), 60_000);
 
 async function startManualScan() {
@@ -1034,6 +2343,7 @@ async function startManualScan() {
             elements.settingsStatus.textContent = status.is_preview
                 ? "预览完成；满意后点击“保存参数”用于交易"
                 : "正式候选已更新";
+            state.candleCache.clear();
             await loadCandidates({ reloadChart: true });
         } else {
             setConnectionStatus("error", status.message || "扫描失败");
