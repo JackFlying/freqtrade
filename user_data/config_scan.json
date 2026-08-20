@@ -101,11 +101,11 @@
         // 交易所名称：Binance。
         "name": "binance",
 
-        // Binance API Key；模拟交易读取公开行情时可以留空。
-        "key": "",
+        // Binance API Key；真实值由 config_private.json 覆盖。
+        "key": "REPLACE_WITH_BINANCE_API_KEY",
 
-        // Binance API Secret；模拟交易读取公开行情时可以留空。
-        "secret": "",
+        // Binance API Secret；真实值由 config_private.json 覆盖。
+        "secret": "REPLACE_WITH_BINANCE_API_SECRET",
 
         // 单核服务器使用 REST 拉取 K 线，避免大量 WebSocket 长连接争抢资源。
         "enable_ws": false,
@@ -231,20 +231,20 @@
         // 是否开放 OpenAPI/Swagger 接口文档。
         "enable_openapi": false,
 
-        // JWT 签名密钥，用于保护 API 登录令牌；真实部署时应替换为随机强密钥。
-        "jwt_secret_key": "scanner-local-jwt-secret-change-me",
+        // JWT 签名密钥；真实值由 config_private.json 覆盖。
+        "jwt_secret_key": "REPLACE_WITH_A_RANDOM_JWT_SECRET_AT_LEAST_32_CHARS",
 
-        // WebSocket 连接令牌；真实部署时应替换为随机强令牌。
-        "ws_token": "scanner-local-websocket-token-change-me",
+        // WebSocket 连接令牌；真实值由 config_private.json 覆盖。
+        "ws_token": "REPLACE_WITH_A_RANDOM_WEBSOCKET_TOKEN",
 
         // 允许跨域访问 API 的来源列表；空数组表示不额外允许跨域来源。
         "CORS_origins": [],
 
-        // FreqUI 和 REST API 登录用户名。
-        "username": "freqtrader",
+        // FreqUI 和 REST API 登录用户名；真实值由 config_private.json 覆盖。
+        "username": "REPLACE_WITH_PRIVATE_USERNAME",
 
-        // FreqUI 和 REST API 登录密码；真实部署时应更换强密码。
-        "password": "freqtrade-local"
+        // FreqUI 和 REST API 登录密码；真实值由 config_private.json 覆盖。
+        "password": "REPLACE_WITH_A_STRONG_DASHBOARD_PASSWORD"
     },
 
     // 程序启动后的机器人状态：running 表示重启后自动恢复交易和持仓管理。

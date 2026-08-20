@@ -16,7 +16,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from freqtrade.configuration.load_config import load_config_file
+from freqtrade.configuration.load_config import load_from_files
 from pydantic import BaseModel, Field
 
 
@@ -123,7 +123,8 @@ class BacktestRequest(BaseModel):
 
 
 def read_config() -> dict[str, Any]:
-    return load_config_file(str(CONFIG_PATH))
+    private_config_path = ROOT_DIR / "user_data/config_private.json"
+    return load_from_files([str(CONFIG_PATH), str(private_config_path)])
 
 
 def parse_number(value: Any) -> float | None:

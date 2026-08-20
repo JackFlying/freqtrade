@@ -2,6 +2,7 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+user_data/config_private.json
 logfile.txt
 freqtrade-plot.html
 freqtrade-profit-plot.html
