@@ -99,15 +99,15 @@ class DashboardSettings(BaseModel):
     ma7_reclaim_enabled: bool = True
     ma7_reclaim_tolerance_pct: float = Field(default=1.0, ge=0.1, le=5)
     ma7_reclaim_lookback_days: int = Field(default=2, ge=1, le=5)
-    ma7_exit_threshold_pct: float = Field(default=2.0, ge=0, le=100)
-    hard_stoploss_pct: float = Field(default=6.0, ge=0.1, le=99)
+    ma7_exit_threshold_pct: float = Field(default=4.0, ge=0, le=100)
+    hard_stoploss_pct: float = Field(default=12.0, ge=0.1, le=99)
     peak_drawdown_stop_enabled: bool = False
     peak_drawdown_stop_pct: float = Field(default=5.0, ge=0.1, le=99)
     dynamic_drawdown_stop_enabled: bool = False
     dynamic_drawdown_activation_pct: float = Field(default=3.0, ge=0.1, le=100)
     dynamic_max_profit_giveback_pct: float = Field(default=5.0, ge=0.5, le=50)
-    chandelier_exit_enabled: bool = False
-    partial_take_profit_enabled: bool = False
+    chandelier_exit_enabled: bool = True
+    partial_take_profit_enabled: bool = True
     no_progress_exit_enabled: bool = False
     candidate_reentry_required: bool = False
     cooldown_enabled: bool = False
@@ -212,17 +212,17 @@ def read_runtime_settings() -> dict[str, Any]:
         "use_4h_ma_filter": False,
         "use_ma99_filter": False,
         "ma7_reclaim_enabled": True,
-        "ma7_reclaim_tolerance_pct": 1.0,
+        "ma7_reclaim_tolerance_pct": 2.0,
         "ma7_reclaim_lookback_days": 2,
-        "ma7_exit_threshold_pct": 2.0,
-        "hard_stoploss_pct": 6.0,
+        "ma7_exit_threshold_pct": 4.0,
+        "hard_stoploss_pct": 12.0,
         "peak_drawdown_stop_enabled": False,
         "peak_drawdown_stop_pct": 5.0,
         "dynamic_drawdown_stop_enabled": False,
         "dynamic_drawdown_activation_pct": 3.0,
         "dynamic_max_profit_giveback_pct": 5.0,
-        "chandelier_exit_enabled": False,
-        "partial_take_profit_enabled": False,
+        "chandelier_exit_enabled": True,
+        "partial_take_profit_enabled": True,
         "no_progress_exit_enabled": False,
         "candidate_reentry_required": False,
         "cooldown_enabled": False,

@@ -37,6 +37,7 @@ const STRATEGY_PRESETS = {
     },
     "4h": {
         label: "4hK线策略",
+        max_open_trades: 1,
         lookback_days: 2,
         min_change_20d: 6,
         max_change_20d: 30,
@@ -44,15 +45,15 @@ const STRATEGY_PRESETS = {
         use_4h_ma_filter: true,
         use_ma99_filter: true,
         ma7_reclaim_enabled: true,
-        ma7_reclaim_tolerance_pct: 1,
+        ma7_reclaim_tolerance_pct: 2,
         ma7_reclaim_lookback_days: 2,
-        ma7_exit_threshold_pct: 1,
-        hard_stoploss_pct: 7,
+        ma7_exit_threshold_pct: 4,
+        hard_stoploss_pct: 12,
         dynamic_drawdown_stop_enabled: false,
         dynamic_drawdown_activation_pct: 1.5,
         dynamic_max_profit_giveback_pct: 2,
-        chandelier_exit_enabled: false,
-        partial_take_profit_enabled: false,
+        chandelier_exit_enabled: true,
+        partial_take_profit_enabled: true,
         cooldown_enabled: true,
         cooldown_hours: 4,
         candidate_scan_interval_hours: 4,
@@ -492,6 +493,7 @@ function currentSettingsPayload() {
 
 function applyStrategyPreset(timeframe) {
     const preset = STRATEGY_PRESETS[timeframe] || STRATEGY_PRESETS["1d"];
+    elements.maxOpenTradesInput.value = preset.max_open_trades ?? 1;
     elements.lookbackDaysInput.value = preset.lookback_days;
     elements.minChange20dInput.value = preset.min_change_20d;
     elements.maxChange20dInput.value = preset.max_change_20d;
@@ -864,6 +866,7 @@ function formatBacktestMonth(value) {
     return new Intl.DateTimeFormat("zh-CN", {
         year: "numeric",
         month: "2-digit",
+        timeZone: "UTC",
     }).format(new Date(value));
 }
 
@@ -878,14 +881,15 @@ function calculateMonthlyReturns(curve) {
             (point) => point.time
                 && !Number.isNaN(point.date.getTime())
                 && Number.isFinite(point.equity),
-        );
+        )
+        .sort((left, right) => left.date - right.date);
     const months = [];
     let current = null;
     let previousPoint = null;
 
     points.forEach((point) => {
-        const key = `${point.date.getFullYear()}-${String(
-            point.date.getMonth() + 1,
+        const key = `${point.date.getUTCFullYear()}-${String(
+            point.date.getUTCMonth() + 1,
         ).padStart(2, "0")}`;
         if (!current || current.key !== key) {
             if (current) months.push(current);

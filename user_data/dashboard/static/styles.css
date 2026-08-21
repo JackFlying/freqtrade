@@ -1439,6 +1439,8 @@ h3 {
 
 .monthly-returns-wrap {
     overflow-x: auto;
+    max-height: 392px;
+    overflow-y: auto;
 }
 
 .monthly-returns-wrap table {
@@ -1446,6 +1448,13 @@ h3 {
     min-width: 560px;
     border-collapse: collapse;
     font-size: 10px;
+}
+
+.monthly-returns-wrap thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface);
 }
 
 .monthly-returns-wrap th,

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 from pandas import DataFrame
+from talib import abstract as ta
 
 from freqtrade.exchange import timeframe_to_prev_date
 from freqtrade.persistence import Trade
@@ -41,6 +42,7 @@ class SpotScanStrategy(IStrategy):
     )
     _candidate_mtime_ns: int | None = None
     _candidate_pairs: set[str] = set()
+    _candidate_quote_volumes: dict[str, tuple[float, int]] = {}
     _settings_mtime_ns: int | None = None
     _ma7_exit_threshold_pct = 2.0
     _hard_stoploss_pct = 6.0
@@ -96,6 +98,11 @@ class SpotScanStrategy(IStrategy):
 
     def _add_period_exit_indicators(self, dataframe: DataFrame) -> DataFrame:
         dataframe["ma7"] = dataframe["close"].rolling(7, min_periods=7).mean()
+        dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
+        dataframe["volume_sma20"] = dataframe["volume"].rolling(
+            20,
+            min_periods=20,
+        ).mean()
         previous_close = dataframe["close"].shift(1)
         true_range = pd.concat(
             [
@@ -121,6 +128,7 @@ class SpotScanStrategy(IStrategy):
         except OSError:
             self._candidate_mtime_ns = None
             self._candidate_pairs = set()
+            self._candidate_quote_volumes = {}
             return self._candidate_pairs
 
         if mtime_ns == self._candidate_mtime_ns:
@@ -128,16 +136,86 @@ class SpotScanStrategy(IStrategy):
 
         try:
             with self.candidate_path.open(encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
                 self._candidate_pairs = {
-                    row["pair"]
-                    for row in csv.DictReader(csv_file)
-                    if row.get("pair")
+                    row["pair"] for row in rows if row.get("pair")
                 }
+                self._candidate_quote_volumes = {}
+                for index, row in enumerate(rows):
+                    pair = row.get("pair")
+                    if not pair:
+                        continue
+                    try:
+                        volume = float(row.get("quote_volume_24h") or 0)
+                    except (TypeError, ValueError):
+                        volume = 0.0
+                    try:
+                        rank = int(row.get("rank") or index + 1)
+                    except (TypeError, ValueError):
+                        rank = index + 1
+                    self._candidate_quote_volumes[pair] = (volume, rank)
             self._candidate_mtime_ns = mtime_ns
             self._refresh_candidate_reentry_states()
-        except (OSError, KeyError):
+        except (OSError, KeyError, TypeError, ValueError):
             self._candidate_pairs = set()
+            self._candidate_quote_volumes = {}
         return self._candidate_pairs
+
+    def _entry_score(self, pair: str) -> float:
+        if not self.dp:
+            return float("-inf")
+        try:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+            if dataframe.empty:
+                return float("-inf")
+            row = dataframe.iloc[-1]
+            adx = row.get("adx_4h", row.get("adx"))
+            volume = row.get("volume_4h", row.get("volume"))
+            volume_sma20 = row.get(
+                "volume_sma20_4h",
+                row.get("volume_sma20"),
+            )
+            if pd.isna(adx) or pd.isna(volume) or pd.isna(volume_sma20):
+                return float("-inf")
+            if float(volume_sma20) <= 0:
+                return float("-inf")
+            return float(adx) + float(volume) / float(volume_sma20)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return float("-inf")
+
+    def _is_highest_score_entry(
+        self,
+        pair: str,
+        current_time: datetime,
+    ) -> bool:
+        """Allow the highest ADX plus relative-volume candidate to enter first."""
+        candidates = self._load_candidate_pairs()
+        if pair not in candidates:
+            return False
+
+        eligible = [
+            candidate
+            for candidate in candidates
+            if not self._is_pair_in_cooldown(candidate, current_time)
+            and not self._is_pair_waiting_for_reentry(candidate)
+        ]
+        eligible.sort(
+            key=lambda candidate: (
+                -self._entry_score(candidate),
+                -self._candidate_quote_volumes.get(candidate, (0.0, 0))[0],
+                self._candidate_quote_volumes.get(candidate, (0.0, 0))[1],
+                candidate,
+            )
+        )
+        max_open_trades = int(self.config.get("max_open_trades", 1))
+        try:
+            open_trade_count = len(Trade.get_trades_proxy(is_open=True))
+        except (AttributeError, TypeError):
+            open_trade_count = 0
+        slots = max_open_trades - open_trade_count
+        if slots <= 0:
+            return False
+        return pair in set(eligible[:slots])
 
     def _refresh_candidate_reentry_states(self) -> None:
         if not self._candidate_reentry_required:
@@ -465,8 +543,7 @@ class SpotScanStrategy(IStrategy):
     ) -> bool:
         return (
             self._load_entry_enabled()
-            and not self._is_pair_in_cooldown(pair, current_time)
-            and not self._is_pair_waiting_for_reentry(pair)
+            and self._is_highest_score_entry(pair, current_time)
         )
 
     def adjust_trade_position(
