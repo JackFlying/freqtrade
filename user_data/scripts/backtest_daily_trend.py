@@ -705,6 +705,18 @@ def simulate(
                 continue
             row = frame.loc[timestamp]
             entry_price = float(row["open"])
+            chandelier_stop = (
+                float(row["chandelier_stop"])
+                if pd.notna(row["chandelier_stop"])
+                else None
+            )
+            if (
+                bool(settings.get("chandelier_exit_enabled", False))
+                and chandelier_stop is not None
+                and math.isfinite(chandelier_stop)
+                and entry_price <= chandelier_stop
+            ):
+                continue
             amount = available_stake * (1 - FEE_RATE) / entry_price
             cash -= available_stake
             hard_stop = entry_price * (
@@ -822,7 +834,7 @@ def simulate(
                     if pair not in positions
                     and pair not in waiting_for_candidate_absence
                     and cooldown_until.get(pair, scan_time) <= scan_time
-                ][:slots]
+                ]
 
         mark_prices = 0.0
         for pair, position in positions.items():

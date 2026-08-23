@@ -198,6 +198,7 @@ class SpotScanStrategy(IStrategy):
             for candidate in candidates
             if not self._is_pair_in_cooldown(candidate, current_time)
             and not self._is_pair_waiting_for_reentry(candidate)
+            and not self._entry_hits_chandelier_stop(candidate)
         ]
         eligible.sort(
             key=lambda candidate: (
@@ -436,6 +437,33 @@ class SpotScanStrategy(IStrategy):
         except (AttributeError, KeyError, TypeError, ValueError):
             return None
 
+    def _entry_hits_chandelier_stop(
+        self,
+        pair: str,
+        entry_rate: float | None = None,
+    ) -> bool:
+        stop_rate = self._chandelier_stop_rate(pair)
+        if stop_rate is None:
+            return False
+        if entry_rate is None:
+            if not self.dp:
+                return False
+            try:
+                dataframe, _ = self.dp.get_analyzed_dataframe(
+                    pair,
+                    self.timeframe,
+                )
+                if dataframe.empty:
+                    return False
+                entry_rate = float(dataframe.iloc[-1]["close"])
+            except (AttributeError, KeyError, TypeError, ValueError):
+                return False
+        return (
+            math.isfinite(entry_rate)
+            and entry_rate > 0
+            and entry_rate <= stop_rate
+        )
+
     def _partial_trailing_stop_rate(
         self,
         pair: str,
@@ -543,6 +571,7 @@ class SpotScanStrategy(IStrategy):
     ) -> bool:
         return (
             self._load_entry_enabled()
+            and not self._entry_hits_chandelier_stop(pair, rate)
             and self._is_highest_score_entry(pair, current_time)
         )
 

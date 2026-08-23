@@ -485,6 +485,15 @@ def simulate(
             if stake < dynamic_stake * 0.1:
                 continue
             entry = float(row["open"])
+            if parameters.chandelier_exit_enabled:
+                chandelier_atr = float(signal_row["chandelier_atr_22"])
+                chandelier_high = float(signal_row["chandelier_high_22"])
+                if pd.notna(chandelier_atr) and pd.notna(chandelier_high):
+                    chandelier_stop = (
+                        chandelier_high - chandelier_atr * 3.0
+                    )
+                    if entry <= chandelier_stop:
+                        continue
             hard_stop = entry * (1 - parameters.stop_pct / 100)
             swing_stop = float(signal_row["swing_low"]) - float(
                 signal_row["atr"]
@@ -588,7 +597,7 @@ def simulate(
         if slots > 0:
             pending_entries = [
                 pair for pair, _ in candidates if pair not in positions
-            ][:slots]
+            ]
 
         marked_value = 0.0
         for pair, position in positions.items():
