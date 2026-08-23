@@ -11,6 +11,7 @@ const COLORS = {
 
 const CANDLE_CACHE_TTL_MS = 30_000;
 const BACKTEST_TRADE_PAGE_SIZE = 100;
+const AUTH_TOKEN_KEY = "trend-console-access-token";
 
 const STRATEGY_PRESETS = {
     "1d": {
@@ -84,8 +85,16 @@ const state = {
     backtestVisibleTradeCount: 0,
     settingsTab: "filter",
 };
+let appInitialized = false;
 
 const elements = {
+    authScreen: document.querySelector("#authScreen"),
+    appShell: document.querySelector("#appShell"),
+    loginForm: document.querySelector("#loginForm"),
+    loginUsername: document.querySelector("#loginUsername"),
+    loginPassword: document.querySelector("#loginPassword"),
+    loginError: document.querySelector("#loginError"),
+    logoutButton: document.querySelector("#logoutButton"),
     statusDot: document.querySelector("#statusDot"),
     statusText: document.querySelector("#statusText"),
     updatedAt: document.querySelector("#updatedAt"),
@@ -280,7 +289,19 @@ function setConnectionStatus(kind, text) {
 }
 
 async function fetchJson(url, options = {}) {
-    const response = await fetch(url, { cache: "no-store", ...options });
+    const headers = new Headers(options.headers || {});
+    const token = window.localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`);
+    }
+    const response = await fetch(url, {
+        cache: "no-store",
+        ...options,
+        headers,
+    });
+    if (response.status === 401) {
+        showLogin("登录已失效，请重新登录");
+    }
     if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -301,6 +322,67 @@ async function fetchJson(url, options = {}) {
         throw new Error(detail);
     }
     return response.json();
+}
+
+function showLogin(message = "") {
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    elements.appShell.classList.add("is-hidden");
+    elements.authScreen.classList.remove("is-hidden");
+    elements.loginError.textContent = message;
+    elements.loginError.hidden = !message;
+    elements.loginPassword.value = "";
+    elements.loginUsername.focus();
+}
+
+function showApp() {
+    elements.authScreen.classList.add("is-hidden");
+    elements.appShell.classList.remove("is-hidden");
+}
+
+async function submitLogin(event) {
+    event.preventDefault();
+    const username = elements.loginUsername.value.trim();
+    const password = elements.loginPassword.value;
+    elements.loginError.hidden = true;
+    const button = elements.loginForm.querySelector("button[type=submit]");
+    button.disabled = true;
+    button.textContent = "登录中...";
+    try {
+        const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.detail || "登录失败");
+        }
+        window.localStorage.setItem(AUTH_TOKEN_KEY, payload.access_token);
+        elements.loginPassword.value = "";
+        showApp();
+        initializeApp();
+    } catch (error) {
+        elements.loginError.textContent = error.message;
+        elements.loginError.hidden = false;
+    } finally {
+        button.disabled = false;
+        button.textContent = "登录";
+    }
+}
+
+async function bootstrapAuth() {
+    const token = window.localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) {
+        showLogin();
+        return;
+    }
+    try {
+        await fetchJson("/api/auth/me");
+        showApp();
+        initializeApp();
+    } catch {
+        showLogin("登录已失效，请重新登录");
+    }
 }
 
 async function loadCandidates({
@@ -2314,11 +2396,22 @@ elements.viewTabs.addEventListener("click", (event) => {
 elements.runBacktestButton.addEventListener("click", startBacktest);
 elements.cancelBacktestButton.addEventListener("click", cancelBacktest);
 
-initializeSettingsTabs();
-loadSettings();
-loadCandidates({ preserveSelection: false, reloadChart: true });
-loadBacktestStatus();
-setInterval(() => loadCandidates(), 60_000);
+elements.loginForm.addEventListener("submit", submitLogin);
+elements.logoutButton.addEventListener("click", () => {
+    showLogin("已退出登录");
+});
+
+function initializeApp() {
+    if (appInitialized) return;
+    appInitialized = true;
+    initializeSettingsTabs();
+    loadSettings();
+    loadCandidates({ preserveSelection: false, reloadChart: true });
+    loadBacktestStatus();
+    setInterval(() => loadCandidates(), 60_000);
+}
+
+bootstrapAuth();
 
 async function startManualScan() {
     if (elements.refreshButton.disabled) return;

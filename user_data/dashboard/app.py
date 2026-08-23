@@ -2,19 +2,22 @@
 
 import asyncio
 import csv
+import hmac
 import json
 import math
 import shutil
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+import jwt
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from freqtrade.configuration.load_config import load_from_files
 from pydantic import BaseModel, Field
@@ -61,6 +64,38 @@ async def revalidate_static_assets(request, call_next):
     if path == "/" or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@app.middleware("http")
+async def require_authentication(request: Request, call_next):
+    path = request.url.path
+    public = (
+        path == "/"
+        or path == "/api/auth/login"
+        or path == "/api/health"
+        or path.startswith("/static/")
+        or request.method == "OPTIONS"
+    )
+    if public:
+        return await call_next(request)
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "需要登录"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        request.state.user = decode_access_token(token)
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, TypeError):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "登录已失效，请重新登录"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
 
 
 _response_cache: dict[tuple[str, str, int], tuple[float, dict[str, Any]]] = {}
@@ -122,9 +157,42 @@ class BacktestRequest(BaseModel):
     strategy_timeframe: Literal["1d", "4h"] = "1d"
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 def read_config() -> dict[str, Any]:
     private_config_path = ROOT_DIR / "user_data/config_private.json"
     return load_from_files([str(CONFIG_PATH), str(private_config_path)])
+
+
+def auth_config() -> dict[str, str]:
+    api_config = read_config().get("api_server", {})
+    return {
+        "username": str(api_config.get("username", "")),
+        "password": str(api_config.get("password", "")),
+        "jwt_secret_key": str(api_config.get("jwt_secret_key", "")),
+    }
+
+
+def issue_access_token(username: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": username,
+        "iat": now,
+        "exp": now + timedelta(hours=8),
+    }
+    return jwt.encode(payload, auth_config()["jwt_secret_key"], algorithm="HS256")
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    return jwt.decode(
+        token,
+        auth_config()["jwt_secret_key"],
+        algorithms=["HS256"],
+        options={"require": ["sub", "iat", "exp"]},
+    )
 
 
 def parse_number(value: Any) -> float | None:
@@ -795,6 +863,26 @@ async def startup_prewarm() -> None:
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest) -> dict[str, Any]:
+    credentials = auth_config()
+    if not (
+        hmac.compare_digest(request.username, credentials["username"])
+        and hmac.compare_digest(request.password, credentials["password"])
+    ):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {
+        "access_token": issue_access_token(credentials["username"]),
+        "token_type": "bearer",
+        "expires_in": 8 * 60 * 60,
+    }
+
+
+@app.get("/api/auth/me")
+async def current_user(request: Request) -> dict[str, str]:
+    return {"username": request.state.user["sub"]}
 
 
 @app.get("/api/health")

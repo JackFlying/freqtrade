@@ -8,7 +8,25 @@
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-    <div class="app-shell">
+    <section class="auth-screen" id="authScreen" aria-labelledby="loginTitle">
+        <form class="login-panel" id="loginForm">
+            <span class="section-label">BINANCE SPOT · USDT</span>
+            <h1 id="loginTitle">趋势策略控制台</h1>
+            <p>登录后查看行情、候选和交易设置。</p>
+            <label class="login-field">
+                <span>用户名</span>
+                <input id="loginUsername" name="username" autocomplete="username" required>
+            </label>
+            <label class="login-field">
+                <span>密码</span>
+                <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+            </label>
+            <button class="login-button" type="submit">登录</button>
+            <p class="login-error" id="loginError" role="alert" hidden></p>
+        </form>
+    </section>
+
+    <div class="app-shell is-hidden" id="appShell">
         <header class="topbar">
             <div>
                 <p class="eyebrow">BINANCE SPOT · USDT</p>
@@ -24,6 +42,7 @@
                 <span class="divider"></span>
                 <span>最近扫描：</span>
                 <strong id="updatedAt">--</strong>
+                <button class="logout-button" id="logoutButton" type="button">退出</button>
             </div>
         </header>
 

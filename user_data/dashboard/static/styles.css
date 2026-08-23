@@ -35,6 +35,87 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
+.auth-screen {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+}
+
+.login-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    display: grid;
+    gap: 16px;
+    max-width: 390px;
+    padding: 32px;
+    width: 100%;
+}
+
+.login-panel h1 {
+    font-size: 28px;
+    margin: 0;
+}
+
+.login-panel p {
+    color: var(--muted);
+    margin: -4px 0 4px;
+}
+
+.login-field {
+    display: grid;
+    gap: 6px;
+}
+
+.login-field span {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.login-field input {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    min-height: 42px;
+    padding: 8px 10px;
+}
+
+.login-button {
+    background: var(--accent);
+    border: 0;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 700;
+    min-height: 42px;
+}
+
+.login-button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.login-error {
+    color: var(--loss) !important;
+    font-size: 13px;
+    margin: 0 !important;
+}
+
+.logout-button {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
 button,
 input {
     font: inherit;

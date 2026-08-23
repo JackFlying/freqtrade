@@ -36,6 +36,9 @@
     // 模拟交易的初始钱包余额，仅在 dry_run=true 时生效。
     "dry_run_wallet": 1000,
 
+    // 独立实盘数据库；与模拟盘数据库分离，避免切换模式时混淆交易记录。
+    "db_url": "sqlite:////opt/freqtrade/user_data/trades_live.sqlite",
+
     // 交易模式：spot 表示现货交易。
     "trading_mode": "spot",
 
