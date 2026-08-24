@@ -24,6 +24,10 @@ from freqtrade.configuration.load_config import load_config_file
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT_DIR / "user_data/config_scan.json"
 DAY_MS = 24 * 60 * 60 * 1000
+BINANCE_ASSET_METADATA_URL = (
+    "https://www.binance.com/bapi/asset/v2/public/asset/asset/get-all-asset"
+)
+BINANCE_RISK_TAGS = {"monitoring", "seed"}
 OHLCV_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 OUTPUT_COLUMNS = [
     "rank",
@@ -316,6 +320,109 @@ def load_recent_risk_pairs(scanner_config: dict[str, Any]) -> set[str]:
         return set()
 
 
+def base_asset(pair: str) -> str:
+    return pair.split("/", maxsplit=1)[0].upper()
+
+
+def read_binance_risk_assets(
+    path: Path,
+) -> tuple[dict[str, list[str]], datetime] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        generated_at = datetime.fromisoformat(str(payload["generated_at"]))
+        if generated_at.tzinfo is None:
+            generated_at = generated_at.replace(tzinfo=timezone.utc)
+        assets = payload["assets"]
+        if not isinstance(assets, dict):
+            return None
+        return (
+            {
+                str(asset).upper(): [str(reason) for reason in reasons]
+                for asset, reasons in assets.items()
+                if isinstance(reasons, list)
+            },
+            generated_at.astimezone(timezone.utc),
+        )
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return None
+
+
+def parse_binance_risk_assets(payload: Any) -> dict[str, list[str]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ValueError("Unexpected Binance asset metadata response")
+
+    risk_assets: dict[str, list[str]] = {}
+    for asset in payload["data"]:
+        if not isinstance(asset, dict):
+            continue
+        asset_code = str(asset.get("assetCode") or "").upper()
+        if not asset_code:
+            continue
+        tags = asset.get("tags")
+        if not isinstance(tags, list):
+            tags = []
+        reasons = [
+            f"tag:{tag}"
+            for tag in tags
+            if str(tag).lower() in BINANCE_RISK_TAGS
+        ]
+        if asset.get("preDelist") is True:
+            reasons.append("preDelist")
+        if asset.get("delisted") is True:
+            reasons.append("delisted")
+        if asset.get("trading") is False:
+            reasons.append("trading=false")
+        if reasons:
+            risk_assets[asset_code] = reasons
+    return risk_assets
+
+
+def load_binance_risk_assets(
+    cache_path: Path,
+    refresh_seconds: int,
+) -> dict[str, list[str]]:
+    cached = read_binance_risk_assets(cache_path)
+    now = datetime.now(timezone.utc)
+    cached_age_seconds = (
+        (now - cached[1]).total_seconds() if cached else None
+    )
+    if (
+        cached
+        and cached_age_seconds is not None
+        and 0 <= cached_age_seconds < refresh_seconds
+    ):
+        return cached[0]
+
+    try:
+        request = Request(
+            BINANCE_ASSET_METADATA_URL,
+            headers={"User-Agent": "freqtrade-binance-risk-filter"},
+        )
+        with urlopen(request, timeout=15) as response:
+            risk_assets = parse_binance_risk_assets(
+                json.loads(response.read().decode("utf-8"))
+            )
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        if cached:
+            return cached[0]
+        raise RuntimeError("Unable to load Binance asset risk metadata")
+
+    atomic_write_json(
+        cache_path,
+        {
+            "generated_at": now.isoformat(),
+            "assets": risk_assets,
+        },
+    )
+    return risk_assets
+
+
 def is_wash_trading_suspect(
     dataframe: pd.DataFrame,
     scanner_config: dict[str, Any],
@@ -381,6 +488,7 @@ async def refresh_universe(
     config: dict[str, Any],
     scanner_config: dict[str, Any],
     universe_path: Path,
+    binance_risk_assets: dict[str, list[str]],
 ) -> list[dict[str, Any]]:
     tickers = await async_call_with_retry(exchange.fetch_tickers)
     whitelist = config["exchange"]["pair_whitelist"]
@@ -401,6 +509,8 @@ async def refresh_universe(
             and not matches_any(pair, blacklist)
             and market.get("base") not in stablecoin_bases
             and pair not in recent_risk_pairs
+            and str(market.get("base") or "").upper()
+            not in binance_risk_assets
         ):
             continue
 
@@ -916,6 +1026,7 @@ async def run_screen(args: argparse.Namespace) -> int:
     cache_directory.mkdir(parents=True, exist_ok=True)
     output_directory.mkdir(parents=True, exist_ok=True)
     universe_path = cache_directory / "universe.json"
+    risk_asset_cache_path = cache_directory / "binance_risk_assets.json"
 
     exchange_class = getattr(ccxt, config["exchange"]["name"])
     ccxt_config = config["exchange"].get("ccxt_async_config", {})
@@ -932,6 +1043,10 @@ async def run_screen(args: argparse.Namespace) -> int:
 
     try:
         await async_call_with_retry(exchange.load_markets)
+        binance_risk_assets = load_binance_risk_assets(
+            risk_asset_cache_path,
+            int(scanner_config.get("risk_asset_refresh_seconds", 900)),
+        )
         universe = cached_universe(
             universe_path,
             int(scanner_config["universe_refresh_seconds"]),
@@ -944,6 +1059,7 @@ async def run_screen(args: argparse.Namespace) -> int:
                 config,
                 scanner_config,
                 universe_path,
+                binance_risk_assets,
             )
         else:
             universe = [
@@ -954,8 +1070,21 @@ async def run_screen(args: argparse.Namespace) -> int:
             ]
         recent_risk_pairs = load_recent_risk_pairs(scanner_config)
         universe = [
-            item for item in universe if item["pair"] not in recent_risk_pairs
+            item
+            for item in universe
+            if item["pair"] not in recent_risk_pairs
+            and base_asset(item["pair"]) not in binance_risk_assets
         ]
+        atomic_write_json(
+            universe_path,
+            {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "minimum_quote_volume": float(
+                    scanner_config["minimum_quote_volume"]
+                ),
+                "pairs": universe,
+            },
+        )
 
         print(f"Updating provisional daily candles for {len(universe)} pairs...")
         semaphore = asyncio.Semaphore(int(scanner_config["concurrency"]))

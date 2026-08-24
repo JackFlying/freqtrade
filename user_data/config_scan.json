@@ -290,6 +290,9 @@
             // 成交额交易池每 1 小时扫描全量市场并重新筛选一次。
             "universe_refresh_seconds": 3600,
 
+            // 每 15 分钟刷新币安官方风险资产元数据；Monitoring、Seed、预下架、已下架和暂停交易资产均禁止买入。
+            "risk_asset_refresh_seconds": 900,
+
             // 未收盘日线和 MA 每 15 分钟更新一次。
             "update_interval_seconds": 900,
 

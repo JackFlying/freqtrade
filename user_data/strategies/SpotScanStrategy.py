@@ -1,7 +1,8 @@
 import csv
 import json
 import math
-from datetime import datetime, timedelta
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +12,12 @@ from talib import abstract as ta
 from freqtrade.exchange import timeframe_to_prev_date
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy, informative, stoploss_from_absolute
+
+
+BINANCE_ASSET_METADATA_URL = (
+    "https://www.binance.com/bapi/asset/v2/public/asset/asset/get-all-asset"
+)
+BINANCE_RISK_TAGS = {"monitoring", "seed"}
 
 
 class SpotScanStrategy(IStrategy):
@@ -40,9 +47,22 @@ class SpotScanStrategy(IStrategy):
         Path(__file__).resolve().parents[2]
         / "user_data/scan_data/daily_trend/runtime_settings.json"
     )
+    binance_risk_assets_path = (
+        Path(__file__).resolve().parents[2]
+        / "user_data/scan_data/daily_trend/binance_risk_assets.json"
+    )
+    risk_flags_path = (
+        Path(__file__).resolve().parents[2]
+        / "user_data/scan_data/daily_trend/risk_flags.json"
+    )
     _candidate_mtime_ns: int | None = None
     _candidate_pairs: set[str] = set()
     _candidate_quote_volumes: dict[str, tuple[float, int]] = {}
+    _risk_asset_mtime_ns: int | None = None
+    _risk_asset_generated_at: datetime | None = None
+    _risk_assets: set[str] = set()
+    _risk_flags_mtime_ns: int | None = None
+    _risk_flag_pairs: set[str] = set()
     _settings_mtime_ns: int | None = None
     _ma7_exit_threshold_pct = 2.0
     _hard_stoploss_pct = 6.0
@@ -183,6 +203,197 @@ class SpotScanStrategy(IStrategy):
         except (AttributeError, KeyError, TypeError, ValueError):
             return float("-inf")
 
+    def _refresh_binance_risk_assets(self) -> bool:
+        try:
+            request = urllib.request.Request(
+                BINANCE_ASSET_METADATA_URL,
+                headers={"User-Agent": "freqtrade-binance-risk-filter"},
+            )
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            asset_data = payload.get("data")
+            if not isinstance(asset_data, list):
+                raise ValueError("Unexpected Binance asset metadata response")
+            risk_assets: set[str] = set()
+            for asset in asset_data:
+                if not isinstance(asset, dict):
+                    continue
+                tags = asset.get("tags")
+                if not isinstance(tags, list):
+                    tags = []
+                if (
+                    any(
+                        str(tag).lower() in BINANCE_RISK_TAGS
+                        for tag in tags
+                    )
+                    or asset.get("preDelist") is True
+                    or asset.get("delisted") is True
+                    or asset.get("trading") is False
+                ):
+                    asset_code = str(asset.get("assetCode") or "").upper()
+                    if asset_code:
+                        risk_assets.add(asset_code)
+            now = datetime.now(timezone.utc)
+            temp_path = self.binance_risk_assets_path.with_suffix(".tmp")
+            temp_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": now.isoformat(),
+                        "assets": {
+                            asset: ["strategy_refresh"]
+                            for asset in sorted(risk_assets)
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            temp_path.replace(self.binance_risk_assets_path)
+            self._risk_assets = risk_assets
+            self._risk_asset_generated_at = now
+            self._risk_asset_mtime_ns = (
+                self.binance_risk_assets_path.stat().st_mtime_ns
+            )
+            return True
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
+            return False
+
+    def _is_binance_risk_pair(self, pair: str) -> bool:
+        """Fail closed when current Binance risk metadata is unavailable."""
+        refresh_required = False
+        try:
+            mtime_ns = self.binance_risk_assets_path.stat().st_mtime_ns
+        except OSError:
+            self._risk_asset_mtime_ns = None
+            self._risk_asset_generated_at = None
+            self._risk_assets = set()
+            refresh_required = True
+
+        if not refresh_required and mtime_ns != self._risk_asset_mtime_ns:
+            try:
+                payload = json.loads(
+                    self.binance_risk_assets_path.read_text(encoding="utf-8")
+                )
+                generated_at = datetime.fromisoformat(
+                    str(payload["generated_at"])
+                )
+                if generated_at.tzinfo is None:
+                    generated_at = generated_at.replace(tzinfo=timezone.utc)
+                assets = payload["assets"]
+                if not isinstance(assets, dict):
+                    raise ValueError("Invalid risk asset cache")
+                self._risk_assets = {
+                    str(asset).upper()
+                    for asset, reasons in assets.items()
+                    if isinstance(reasons, list) and reasons
+                }
+                self._risk_asset_generated_at = generated_at.astimezone(
+                    timezone.utc
+                )
+                self._risk_asset_mtime_ns = mtime_ns
+            except (
+                KeyError,
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                self._risk_asset_generated_at = None
+                self._risk_assets = set()
+                refresh_required = True
+
+        refresh_seconds = int(
+            self.config.get("scanner", {})
+            .get("daily_trend", {})
+            .get("risk_asset_refresh_seconds", 900)
+        )
+        cache_age_seconds = (
+            (
+                datetime.now(timezone.utc) - self._risk_asset_generated_at
+            ).total_seconds()
+            if self._risk_asset_generated_at
+            else None
+        )
+        if (
+            refresh_required
+            or cache_age_seconds is None
+            or cache_age_seconds < 0
+            or cache_age_seconds > max(refresh_seconds * 2, 60)
+        ) and not self._refresh_binance_risk_assets():
+            return True
+        if (
+            self._risk_asset_generated_at is None
+        ):
+            return True
+        return pair.split("/", maxsplit=1)[0].upper() in self._risk_assets
+
+    def _is_manually_risk_flagged(self, pair: str) -> bool:
+        try:
+            mtime_ns = self.risk_flags_path.stat().st_mtime_ns
+        except OSError:
+            self._risk_flags_mtime_ns = None
+            self._risk_flag_pairs = set()
+            return False
+
+        if mtime_ns != self._risk_flags_mtime_ns:
+            try:
+                entries = json.loads(
+                    self.risk_flags_path.read_text(encoding="utf-8")
+                ).get("pairs", {})
+                if not isinstance(entries, dict):
+                    raise ValueError("Invalid manual risk flags")
+                now = pd.Timestamp.now(tz="UTC")
+                cutoff = now - pd.Timedelta(days=30)
+                flagged_pairs: set[str] = set()
+                for flagged_pair, entry in entries.items():
+                    if isinstance(entry, str):
+                        flagged_at, expires_at = entry, None
+                    elif isinstance(entry, dict):
+                        flagged_at = entry.get("flagged_at")
+                        expires_at = entry.get("expires_at")
+                    else:
+                        continue
+                    if not isinstance(flagged_at, str):
+                        continue
+                    flagged_time = pd.Timestamp(flagged_at)
+                    if flagged_time.tzinfo is None:
+                        flagged_time = flagged_time.tz_localize("UTC")
+                    else:
+                        flagged_time = flagged_time.tz_convert("UTC")
+                    if flagged_time < cutoff:
+                        continue
+                    if expires_at:
+                        expiry = pd.Timestamp(expires_at)
+                        if expiry.tzinfo is None:
+                            expiry = expiry.tz_localize("UTC")
+                        else:
+                            expiry = expiry.tz_convert("UTC")
+                        if expiry < now:
+                            continue
+                    flagged_pairs.add(str(flagged_pair))
+                self._risk_flag_pairs = flagged_pairs
+                self._risk_flags_mtime_ns = mtime_ns
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                self._risk_flag_pairs = set()
+        return pair in self._risk_flag_pairs
+
+    def _is_risk_pair(self, pair: str) -> bool:
+        return self._is_binance_risk_pair(pair) or self._is_manually_risk_flagged(
+            pair
+        )
+
     def _is_highest_score_entry(
         self,
         pair: str,
@@ -199,6 +410,7 @@ class SpotScanStrategy(IStrategy):
             if not self._is_pair_in_cooldown(candidate, current_time)
             and not self._is_pair_waiting_for_reentry(candidate)
             and not self._entry_hits_chandelier_stop(candidate)
+            and not self._is_risk_pair(candidate)
         ]
         eligible.sort(
             key=lambda candidate: (
@@ -569,11 +781,14 @@ class SpotScanStrategy(IStrategy):
         side: str,
         **kwargs,
     ) -> bool:
-        return (
+        allowed = (
             self._load_entry_enabled()
+            and not self._is_risk_pair(pair)
             and not self._entry_hits_chandelier_stop(pair, rate)
             and self._is_highest_score_entry(pair, current_time)
         )
+
+        return allowed
 
     def adjust_trade_position(
         self,
