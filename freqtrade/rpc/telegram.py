@@ -493,6 +493,7 @@ class Telegram(RPCHandler):
                         f"{fmt_coin(msg['cumulative_profit'], msg['stake_currency'])}{cp_fiat}`\n"
                     )
         enter_tag = f"*Enter Tag:* `{msg['enter_tag']}`\n" if msg.get("enter_tag") else ""
+        exit_reason = self._display_exit_reason(msg["exit_reason"])
         message = (
             f"{self._get_exit_emoji(msg)} *{self._exchange_from_msg(msg)}:* "
             f"{exit_wording} {msg['pair']} (#{msg['trade_id']})\n"
@@ -501,7 +502,7 @@ class Telegram(RPCHandler):
             f"`{format_pct(msg['profit_ratio'])}{profit_extra}`\n"
             f"{cp_extra}"
             f"{enter_tag}"
-            f"*Exit Reason:* `{msg['exit_reason']}`\n"
+            f"*Exit Reason:* `{exit_reason}`\n"
             f"*Direction:* `{msg['direction']}"
             f"{leverage_text}`\n"
             f"*Amount:* `{round_value(msg['amount'], 8)}`\n"
@@ -524,6 +525,18 @@ class Telegram(RPCHandler):
         else:
             message += f"\n*Duration:* `{duration} ({duration_min:.1f} min)`"
         return message
+
+    def _display_exit_reason(self, exit_reason: str) -> str:
+        """
+        Keep Freqtrade's stored exit reason intact while clarifying the dynamic
+        Chandelier stop used by the local SpotScanStrategy.
+        """
+        if (
+            self._config.get("strategy") == "SpotScanStrategy"
+            and exit_reason == "trailing_stop_loss"
+        ):
+            return "chandelier_exit (dynamic stop)"
+        return exit_reason
 
     def __format_profit_fiat(
         self, msg: RPCExitMsg, key: Literal["stake_amount", "profit_amount", "cumulative_profit"]

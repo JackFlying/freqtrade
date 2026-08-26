@@ -2534,6 +2534,20 @@ def test_send_msg_exit_notification(default_conf, mocker) -> None:
         telegram._rpc._fiat_converter.convert_amount = old_convamount
 
 
+def test_display_exit_reason_for_spot_scan_strategy(default_conf, mocker) -> None:
+    telegram, _, _ = get_telegram_testobject(mocker, default_conf)
+
+    assert telegram._display_exit_reason("trailing_stop_loss") == "trailing_stop_loss"
+
+    telegram._config["strategy"] = "SpotScanStrategy"
+
+    assert (
+        telegram._display_exit_reason("trailing_stop_loss")
+        == "chandelier_exit (dynamic stop)"
+    )
+    assert telegram._display_exit_reason("stop_loss") == "stop_loss"
+
+
 async def test_send_msg_exit_cancel_notification(default_conf, mocker) -> None:
     telegram, _, msg_mock = get_telegram_testobject(mocker, default_conf)
 

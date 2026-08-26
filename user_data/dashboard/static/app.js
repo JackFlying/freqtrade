@@ -1044,6 +1044,7 @@ function backtestExitReason(reason) {
         "1d_ma7_buffer_break": "日K MA7",
         "4h_ma7_buffer_break": "4h MA7",
         chandelier_exit: "吊灯止损",
+        trailing_stop_loss: "吊灯止损（动态止损触发）",
         partial_trailing_stop: "分批止盈后移动止损",
         end_of_backtest: "区间结束",
     };
