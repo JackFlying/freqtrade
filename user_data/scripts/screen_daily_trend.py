@@ -973,6 +973,39 @@ def write_outputs(
     all_frame = pd.DataFrame(results, columns=OUTPUT_COLUMNS)
     candidates = [result for result in results if result["trend_candidate"]]
     candidate_frame = pd.DataFrame(candidates, columns=OUTPUT_COLUMNS)
+    # #region debug-point B:scanner-stx-state
+    try:
+        stx_result = next(
+            (result for result in results if result.get("pair") == "STX/USDT"),
+            None,
+        )
+        urlopen(
+            Request(
+                "http://127.0.0.1:17777/event",
+                data=json.dumps(
+                    {
+                        "sessionId": "stx-observation-entry",
+                        "runId": "pre-fix",
+                        "hypothesisId": "B",
+                        "location": "screen_daily_trend.write_outputs",
+                        "msg": "[DEBUG] scanner STX state written",
+                        "data": {
+                            "stx_result": stx_result,
+                            "candidate_count": len(candidates),
+                            "candidate_contains_stx": any(
+                                candidate["pair"] == "STX/USDT"
+                                for candidate in candidates
+                            ),
+                        },
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=0.2,
+        ).read()
+    except OSError:
+        pass
+    # #endregion
 
     atomic_write_csv(output_directory / "daily_trend_all.csv", all_frame)
     atomic_write_csv(

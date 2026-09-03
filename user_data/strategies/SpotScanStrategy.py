@@ -157,6 +157,39 @@ class SpotScanStrategy(IStrategy):
         try:
             with self.candidate_path.open(encoding="utf-8", newline="") as csv_file:
                 rows = list(csv.DictReader(csv_file))
+                # #region debug-point A:candidate-snapshot
+                try:
+                    stx_row = next(
+                        (
+                            row
+                            for row in rows
+                            if row.get("pair") == "STX/USDT"
+                        ),
+                        None,
+                    )
+                    urllib.request.urlopen(
+                        urllib.request.Request(
+                            "http://127.0.0.1:17777/event",
+                            data=json.dumps(
+                                {
+                                    "sessionId": "stx-observation-entry",
+                                    "runId": "pre-fix",
+                                    "hypothesisId": "A",
+                                    "location": "SpotScanStrategy._load_candidate_pairs",
+                                    "msg": "[DEBUG] candidate CSV loaded",
+                                    "data": {
+                                        "candidate_path": str(self.candidate_path),
+                                        "stx_row": stx_row,
+                                    },
+                                }
+                            ).encode(),
+                            headers={"Content-Type": "application/json"},
+                        ),
+                        timeout=0.2,
+                    ).read()
+                except OSError:
+                    pass
+                # #endregion
                 self._candidate_pairs = {
                     row["pair"] for row in rows if row.get("pair")
                 }
@@ -787,7 +820,36 @@ class SpotScanStrategy(IStrategy):
             and not self._entry_hits_chandelier_stop(pair, rate)
             and self._is_highest_score_entry(pair, current_time)
         )
-
+        # #region debug-point D:entry-decision
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    "http://127.0.0.1:17777/event",
+                    data=json.dumps(
+                        {
+                            "sessionId": "stx-observation-entry",
+                            "runId": "pre-fix",
+                            "hypothesisId": "D",
+                            "location": "SpotScanStrategy.confirm_trade_entry",
+                            "msg": "[DEBUG] entry decision evaluated",
+                            "data": {
+                                "pair": pair,
+                                "entry_tag": entry_tag,
+                                "rate": rate,
+                                "entry_enabled": self._entry_enabled,
+                                "candidate": pair in self._load_candidate_pairs(),
+                                "risk_excluded": self._is_risk_pair(pair),
+                                "allowed": allowed,
+                            },
+                        }
+                    ).encode(),
+                    headers={"Content-Type": "application/json"},
+                ),
+                timeout=0.2,
+            ).read()
+        except OSError:
+            pass
+        # #endregion
         return allowed
 
     def adjust_trade_position(
