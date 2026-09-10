@@ -1,0 +1,158 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "bot_name": "strategy2-dry",
+    "strategy": "Dynamic4h15mStrategy",
+    "timeframe": "15m",
+    "max_open_trades": 1,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "amend_last_stake_amount": true,
+    "last_stake_amount_min_ratio": 0.1,
+    "tradable_balance_ratio": 1.0,
+    "dry_run": true,
+    "dry_run_wallet": 1000,
+    "db_url": "sqlite:///user_data/trades_strategy2_dry.sqlite",
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "cancel_open_orders_on_exit": false,
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10,
+        "exit_timeout_count": 0,
+        "unit": "minutes"
+    },
+    "entry_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "binance",
+        "key": "",
+        "secret": "",
+        "enable_ws": false,
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "urls": {
+                "api": {
+                    "public": "https://data-api.binance.vision/api/v3",
+                    "v1": "https://data-api.binance.vision/api/v1"
+                }
+            },
+            "options": {
+                "defaultType": "spot",
+                "fetchMarkets": {
+                    "types": [
+                        "spot"
+                    ]
+                }
+            }
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "urls": {
+                "api": {
+                    "public": "https://data-api.binance.vision/api/v3",
+                    "v1": "https://data-api.binance.vision/api/v1"
+                }
+            },
+            "options": {
+                "defaultType": "spot",
+                "fetchMarkets": {
+                    "types": [
+                        "spot"
+                    ]
+                }
+            }
+        },
+        "pair_whitelist": [
+            ".*/USDT"
+        ],
+        "pair_blacklist": [
+            ".*(UP|DOWN|BULL|BEAR)/USDT",
+            ".*([2-5]L|[2-5]S)/USDT",
+            "(AAPLB|AMATB|AMDB|ARMB|ASMLB|BABAB|CBRSB|COHRB|COINB|CRCLB|CRDOB|DJTB|EWYB|GMEB|GOOGLB|HOODB|INTCB|IRENB|MSTRB|MVLLB|NBISB|NVDAB|QQQB|RKLBB|SMCIB|SNDKB|SNXXB|SOXLB|SPCXB|SPYB|TSLAB)/USDT",
+            "(USDC|FDUSD|TUSD|USDP|DAI|EUR|TRY|BRL)/USDT"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "Strategy2QueuePairList",
+            "candidate_path": "scan_results/strategy2/daily_trend_candidates.csv",
+            "include_pairs": [
+                "BTC/USDT"
+            ],
+            "refresh_period": 15
+        }
+    ],
+    "telegram": {
+        "enabled": false,
+        "token": "",
+        "chat_id": ""
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8082,
+        "verbosity": "error",
+        "enable_openapi": false,
+        "jwt_secret_key": "disabled-strategy2-api-jwt-secret",
+        "ws_token": "disabled-strategy2-api-websocket-token",
+        "CORS_origins": [],
+        "username": "",
+        "password": ""
+    },
+    "initial_state": "running",
+    "force_entry_enable": false,
+    "internals": {
+        "process_throttle_secs": 5
+    },
+    "scanner": {
+        "daily_trend": {
+            "minimum_quote_volume": 1000000,
+            "minimum_listing_days": 60,
+            "universe_refresh_seconds": 3600,
+            "risk_asset_refresh_seconds": 900,
+            "update_interval_seconds": 14400,
+            "history_candle_limit": 365,
+            "concurrency": 2,
+            "cache_directory": "user_data/scan_data/strategy2",
+            "output_directory": "user_data/scan_results/strategy2",
+            "stablecoin_bases": [
+                "AEUR",
+                "BUSD",
+                "DAI",
+                "EURI",
+                "FDUSD",
+                "FRAX",
+                "RLUSD",
+                "TUSD",
+                "USDC",
+                "USDD",
+                "USDE",
+                "USDP",
+                "USDS",
+                "USD1",
+                "USTC",
+                "XUSD"
+            ],
+            "risk_flags_file": "user_data/scan_data/strategy2/risk_flags.json",
+            "risk_flag_lookback_days": 30,
+            "wash_trading_filter_enabled": true,
+            "wash_trading_volume_spike_ratio": 12.0,
+            "wash_trading_min_suspicious_days": 3,
+            "wash_trading_max_range_pct": 0.6,
+            "wash_trading_min_daily_quote_volume": 10000000
+        }
+    }
+}

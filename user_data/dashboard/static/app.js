@@ -13,51 +13,105 @@ const CANDLE_CACHE_TTL_MS = 30_000;
 const BACKTEST_TRADE_PAGE_SIZE = 100;
 const AUTH_TOKEN_KEY = "trend-console-access-token";
 
-const STRATEGY_PRESETS = {
-    "1d": {
-        label: "日K策略",
-        lookback_days: 3,
-        min_change_20d: 10,
-        max_change_20d: 50,
-        max_drawdown_to_gain_ratio_pct: 70,
-        use_4h_ma_filter: false,
-        use_ma99_filter: true,
-        ma7_reclaim_enabled: true,
-        ma7_reclaim_tolerance_pct: 1,
-        ma7_reclaim_lookback_days: 2,
-        ma7_exit_threshold_pct: 2.5,
-        hard_stoploss_pct: 5,
-        dynamic_drawdown_stop_enabled: true,
-        dynamic_drawdown_activation_pct: 1.5,
-        dynamic_max_profit_giveback_pct: 2,
-        chandelier_exit_enabled: false,
-        partial_take_profit_enabled: false,
-        cooldown_enabled: true,
-        cooldown_hours: 4,
-        candidate_scan_interval_hours: 0.5,
+const STRATEGY1_PRESET = {
+    label: "策略1",
+    max_open_trades: 1,
+    lookback_days: 2,
+    min_change_20d: 6,
+    max_change_20d: 30,
+    max_drawdown_to_gain_ratio_pct: 50,
+    use_4h_ma_filter: true,
+    use_ma99_filter: true,
+    ma7_reclaim_enabled: true,
+    ma7_reclaim_tolerance_pct: 2,
+    ma7_reclaim_lookback_days: 2,
+    ma7_exit_threshold_pct: 3,
+    hard_stoploss_pct: 6,
+    entry_enabled: true,
+    peak_drawdown_stop_enabled: false,
+    peak_drawdown_stop_pct: 5,
+    dynamic_drawdown_stop_enabled: false,
+    dynamic_drawdown_activation_pct: 1.5,
+    dynamic_max_profit_giveback_pct: 2,
+    chandelier_exit_enabled: true,
+    partial_take_profit_enabled: false,
+    candidate_replacement_enabled: true,
+    replacement_min_score_advantage: 5,
+    replacement_min_hold_bars: 2,
+    no_progress_exit_enabled: false,
+    candidate_reentry_required: false,
+    cooldown_enabled: true,
+    cooldown_hours: 4,
+    candidate_scan_interval_hours: 4,
+    research_4h: {
+        mode: "breakout",
+        adx_min: 22,
+        rsi_min: 38,
+        rsi_max: 68,
+        volume_factor: 0.5,
+        touch_pct: 2.5,
+        breakout_bars: 10,
+        market_filter: true,
+        reward_risk: 3.2,
+        break_even_r: 3,
+        max_hold_bars: 8,
+        ema20_slope_min: -0.1,
+        atr_pct_min: 0.4,
+        atr_pct_max: 9,
+        market_adx_min: 12,
+        take_profit_mode: "adaptive",
+        target_trailing_atr: 1,
+        time_exit_mode: "runner",
+        chandelier_atr_multiplier: 3,
+        target_partial_fraction: 0.75,
+        target_lock_r: 3.5,
+        target_hold_adx_min: 20,
+        target_hold_slope_min: 0.4,
+        target_hold_rsi_min: 65,
+        target_hold_volume_ratio_min: 2,
     },
-    "4h": {
-        label: "4hK线策略",
-        max_open_trades: 1,
-        lookback_days: 2,
-        min_change_20d: 6,
-        max_change_20d: 30,
-        max_drawdown_to_gain_ratio_pct: 50,
-        use_4h_ma_filter: true,
-        use_ma99_filter: true,
-        ma7_reclaim_enabled: true,
-        ma7_reclaim_tolerance_pct: 2,
-        ma7_reclaim_lookback_days: 2,
-        ma7_exit_threshold_pct: 4,
-        hard_stoploss_pct: 12,
-        dynamic_drawdown_stop_enabled: false,
-        dynamic_drawdown_activation_pct: 1.5,
-        dynamic_max_profit_giveback_pct: 2,
-        chandelier_exit_enabled: true,
-        partial_take_profit_enabled: true,
-        cooldown_enabled: true,
-        cooldown_hours: 4,
-        candidate_scan_interval_hours: 4,
+};
+
+const STRATEGY2_PRESET = {
+    ...STRATEGY1_PRESET,
+    label: "策略2",
+    ma7_exit_threshold_pct: 2.5,
+    hard_stoploss_pct: 6.5,
+    candidate_replacement_enabled: true,
+    replacement_min_score_advantage: 5,
+    replacement_min_hold_bars: 2,
+    cooldown_enabled: false,
+    candidate_scan_interval_hours: 4,
+    research_4h: {
+        scan_interval_minutes: 240,
+        dynamic_entry_enabled: false,
+        candidate_queue_refill_enabled: true,
+        candidate_queue_exclude_exited: true,
+        mode: "breakout",
+        adx_min: 22,
+        rsi_min: 38,
+        rsi_max: 68,
+        volume_factor: 0.4,
+        touch_pct: 2.5,
+        breakout_bars: 10,
+        market_filter: true,
+        reward_risk: 3.2,
+        break_even_r: 4,
+        max_hold_bars: 18,
+        ema20_slope_min: -0.1,
+        atr_pct_min: 0.4,
+        atr_pct_max: 9,
+        market_adx_min: 12,
+        take_profit_mode: "adaptive",
+        target_trailing_atr: 1,
+        time_exit_mode: "runner",
+        chandelier_atr_multiplier: 4,
+        target_partial_fraction: 0.75,
+        target_lock_r: 2,
+        target_hold_adx_min: 40,
+        target_hold_slope_min: 0.1,
+        target_hold_rsi_min: 70,
+        target_hold_volume_ratio_min: 1,
     },
 };
 
@@ -84,6 +138,7 @@ const state = {
     backtestTrades: [],
     backtestVisibleTradeCount: 0,
     settingsTab: "filter",
+    activeStrategy: "strategy1",
 };
 let appInitialized = false;
 
@@ -102,11 +157,15 @@ const elements = {
     previewBadge: document.querySelector("#previewBadge"),
     candidateList: document.querySelector("#candidateList"),
     sortSelect: document.querySelector("#sortSelect"),
+    defaultSortOption: document.querySelector("#defaultSortOption"),
     refreshButton: document.querySelector("#refreshButton"),
     refreshButtonLabel: document.querySelector("#refreshButton span"),
     entryEnabledInput: document.querySelector("#entryEnabledInput"),
     maxOpenTradesInput: document.querySelector("#maxOpenTradesInput"),
-    strategyTimeframeInput: document.querySelector("#strategyTimeframeInput"),
+    activeStrategyInput: document.querySelector("#activeStrategyInput"),
+    activeStrategyDescription: document.querySelector(
+        "#activeStrategyDescription",
+    ),
     entryEnabledLabel: document.querySelector("#entryEnabledLabel"),
     entryEnabledBadge: document.querySelector("#entryEnabledBadge"),
     entryEnabledRule: document.querySelector("#entryEnabledRule"),
@@ -116,6 +175,9 @@ const elements = {
     maxChange20dInput: document.querySelector("#maxChange20dInput"),
     maxDrawdownToGainRatioInput: document.querySelector("#maxDrawdownToGainRatioInput"),
     useMa99FilterInput: document.querySelector("#useMa99FilterInput"),
+    ma7ReclaimGroup: document.querySelector("#ma7ReclaimGroup"),
+    ma7ReclaimGroupTitle: document.querySelector("#ma7ReclaimGroupTitle"),
+    ma7ReclaimGroupScope: document.querySelector("#ma7ReclaimGroupScope"),
     ma7ReclaimEnabledInput: document.querySelector("#ma7ReclaimEnabledInput"),
     ma7ReclaimEnabledLabel: document.querySelector("#ma7ReclaimEnabledLabel"),
     ma7ReclaimToleranceInput: document.querySelector("#ma7ReclaimToleranceInput"),
@@ -143,6 +205,116 @@ const elements = {
     ),
     partialTakeProfitEnabledLabel: document.querySelector(
         "#partialTakeProfitEnabledLabel",
+    ),
+    candidateReplacementEnabledInput: document.querySelector(
+        "#candidateReplacementEnabledInput",
+    ),
+    candidateReplacementEnabledLabel: document.querySelector(
+        "#candidateReplacementEnabledLabel",
+    ),
+    candidateReplacementSettings: document.querySelectorAll(
+        ".candidate-replacement-setting",
+    ),
+    replacementMinScoreAdvantageInput: document.querySelector(
+        "#replacementMinScoreAdvantageInput",
+    ),
+    replacementMinHoldBarsInput: document.querySelector(
+        "#replacementMinHoldBarsInput",
+    ),
+    scannerOnly: document.querySelectorAll(".scanner-only"),
+    research4hOnly: document.querySelectorAll(".research-4h-only"),
+    advancedExitTitle: document.querySelector("#advancedExitTitle"),
+    advancedExitScope: document.querySelector("#advancedExitScope"),
+    executionGroupTitle: document.querySelector("#executionGroupTitle"),
+    executionGroupScope: document.querySelector("#executionGroupScope"),
+    researchBreakoutSettings: document.querySelectorAll(
+        ".research-breakout-setting",
+    ),
+    researchPullbackSettings: document.querySelectorAll(
+        ".research-pullback-setting",
+    ),
+    researchMarketSettings: document.querySelectorAll(
+        ".research-market-setting",
+    ),
+    researchTargetTrailingSettings: document.querySelectorAll(
+        ".research-target-trailing-setting",
+    ),
+    researchTargetPartialSettings: document.querySelectorAll(
+        ".research-target-partial-setting",
+    ),
+    researchAdaptiveSettings: document.querySelectorAll(
+        ".research-adaptive-setting",
+    ),
+    research4h: {
+        mode: document.querySelector("#researchModeInput"),
+        adx_min: document.querySelector("#researchAdxMinInput"),
+        rsi_min: document.querySelector("#researchRsiMinInput"),
+        rsi_max: document.querySelector("#researchRsiMaxInput"),
+        volume_factor: document.querySelector("#researchVolumeFactorInput"),
+        touch_pct: document.querySelector("#researchTouchPctInput"),
+        breakout_bars: document.querySelector("#researchBreakoutBarsInput"),
+        market_filter: document.querySelector("#researchMarketFilterInput"),
+        reward_risk: document.querySelector("#researchRewardRiskInput"),
+        break_even_r: document.querySelector("#researchBreakEvenRInput"),
+        max_hold_bars: document.querySelector("#researchMaxHoldBarsInput"),
+        ema20_slope_min: document.querySelector("#researchEmaSlopeMinInput"),
+        atr_pct_min: document.querySelector("#researchAtrPctMinInput"),
+        atr_pct_max: document.querySelector("#researchAtrPctMaxInput"),
+        market_adx_min: document.querySelector("#researchMarketAdxMinInput"),
+        take_profit_mode: document.querySelector(
+            "#researchTakeProfitModeInput",
+        ),
+        target_trailing_atr: document.querySelector(
+            "#researchTargetTrailingAtrInput",
+        ),
+        time_exit_mode: document.querySelector("#researchTimeExitModeInput"),
+        chandelier_atr_multiplier: document.querySelector(
+            "#researchChandelierAtrInput",
+        ),
+        target_partial_fraction: document.querySelector(
+            "#researchTargetPartialFractionInput",
+        ),
+        target_lock_r: document.querySelector("#researchTargetLockRInput"),
+        target_hold_adx_min: document.querySelector(
+            "#researchTargetHoldAdxInput",
+        ),
+        target_hold_slope_min: document.querySelector(
+            "#researchTargetHoldSlopeInput",
+        ),
+        target_hold_rsi_min: document.querySelector(
+            "#researchTargetHoldRsiInput",
+        ),
+        target_hold_volume_ratio_min: document.querySelector(
+            "#researchTargetHoldVolumeInput",
+        ),
+    },
+    researchMarketFilterLabel: document.querySelector(
+        "#researchMarketFilterLabel",
+    ),
+    research4hModeBadge: document.querySelector("#research4hModeBadge"),
+    researchEntryModeBadge: document.querySelector(
+        "#researchEntryModeBadge",
+    ),
+    researchSetupRule: document.querySelector("#researchSetupRule"),
+    researchTrendRule: document.querySelector("#researchTrendRule"),
+    researchQualityRule: document.querySelector("#researchQualityRule"),
+    researchMarketRule: document.querySelector("#researchMarketRule"),
+    researchTargetRule: document.querySelector("#researchTargetRule"),
+    researchBreakEvenRule: document.querySelector(
+        "#researchBreakEvenRule",
+    ),
+    researchAdaptiveRule: document.querySelector("#researchAdaptiveRule"),
+    researchTrailingRule: document.querySelector("#researchTrailingRule"),
+    researchBaseExitRule: document.querySelector("#researchBaseExitRule"),
+    researchTimeRule: document.querySelector("#researchTimeRule"),
+    researchChandelierRule: document.querySelector(
+        "#researchChandelierRule",
+    ),
+    researchMaxOpenTradesRule: document.querySelector(
+        "#researchMaxOpenTradesRule",
+    ),
+    researchReplacementRule: document.querySelector(
+        "#researchReplacementRule",
     ),
     cooldownEnabledInput: document.querySelector("#cooldownEnabledInput"),
     cooldownEnabledLabel: document.querySelector("#cooldownEnabledLabel"),
@@ -180,6 +352,12 @@ const elements = {
     cooldownRuleSection: document.querySelector("#cooldownRuleSection"),
     cooldownRuleValue: document.querySelector("#cooldownRuleValue"),
     candidateReentryRequiredRule: document.querySelector("#candidateReentryRequiredRule"),
+    candidateReplacementRuleSection: document.querySelector(
+        "#candidateReplacementRuleSection",
+    ),
+    candidateReplacementRule: document.querySelector(
+        "#candidateReplacementRule",
+    ),
     peakDrawdownStopRuleValue: document.querySelector("#peakDrawdownStopRuleValue"),
     lookbackDaysTexts: document.querySelectorAll(".lookback-days-text"),
     searchInput: document.querySelector("#searchInput"),
@@ -196,6 +374,8 @@ const elements = {
     changePeriodLabel: document.querySelector("#changePeriodLabel"),
     drawdownPeriodLabel: document.querySelector("#drawdownPeriodLabel"),
     volume24h: document.querySelector("#volume24h"),
+    entryScore: document.querySelector("#entryScore"),
+    entryScoreDetail: document.querySelector("#entryScoreDetail"),
     chartCanvas: document.querySelector("#chartCanvas"),
     chartLoading: document.querySelector("#chartLoading"),
     chartTooltip: document.querySelector("#chartTooltip"),
@@ -247,6 +427,228 @@ function formatQuoteVolume(value) {
     if (Math.abs(number) >= 1e8) return `${(number / 1e8).toFixed(2)}亿`;
     if (Math.abs(number) >= 1e4) return `${(number / 1e4).toFixed(2)}万`;
     return number.toFixed(2);
+}
+
+function formatScore(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        return "--";
+    }
+    return Number(value).toFixed(2);
+}
+
+function setResearch4hValues(settings = {}) {
+    const defaults = STRATEGY1_PRESET.research_4h;
+    const values = { ...defaults, ...settings };
+    Object.entries(elements.research4h).forEach(([key, input]) => {
+        if (!input || !(key in values)) return;
+        if (input.type === "checkbox") {
+            input.checked = Boolean(values[key]);
+        } else if (key === "target_partial_fraction") {
+            input.value = Number(values[key]) * 100;
+        } else {
+            input.value = values[key];
+        }
+    });
+}
+
+function currentResearch4hPayload() {
+    const value = (key) => Number(elements.research4h[key].value);
+    return {
+        scan_interval_minutes: 240,
+        dynamic_entry_enabled: false,
+        candidate_queue_refill_enabled: true,
+        candidate_queue_exclude_exited: true,
+        mode: elements.research4h.mode.value,
+        adx_min: value("adx_min"),
+        rsi_min: value("rsi_min"),
+        rsi_max: value("rsi_max"),
+        volume_factor: value("volume_factor"),
+        touch_pct: value("touch_pct"),
+        breakout_bars: value("breakout_bars"),
+        market_filter: elements.research4h.market_filter.checked,
+        reward_risk: value("reward_risk"),
+        break_even_r: value("break_even_r"),
+        max_hold_bars: value("max_hold_bars"),
+        ema20_slope_min: value("ema20_slope_min"),
+        atr_pct_min: value("atr_pct_min"),
+        atr_pct_max: value("atr_pct_max"),
+        market_adx_min: value("market_adx_min"),
+        take_profit_mode: elements.research4h.take_profit_mode.value,
+        target_trailing_atr: value("target_trailing_atr"),
+        time_exit_mode: elements.research4h.time_exit_mode.value,
+        chandelier_atr_multiplier: value("chandelier_atr_multiplier"),
+        target_partial_fraction: value("target_partial_fraction") / 100,
+        target_lock_r: value("target_lock_r"),
+        target_hold_adx_min: value("target_hold_adx_min"),
+        target_hold_slope_min: value("target_hold_slope_min"),
+        target_hold_rsi_min: value("target_hold_rsi_min"),
+        target_hold_volume_ratio_min: value(
+            "target_hold_volume_ratio_min",
+        ),
+    };
+}
+
+function updateResearch4hVisibility() {
+    const isStrategy2 = elements.activeStrategyInput.value === "strategy2";
+    elements.activeStrategyDescription.textContent = isStrategy2
+        ? "报告冠军 · 4h决策 / 15m成交"
+        : "线上当前逻辑";
+    elements.defaultSortOption.textContent = isStrategy2
+        ? "默认（候选评分）"
+        : "默认（成交额）";
+    elements.scannerOnly.forEach((element) => {
+        element.hidden = isStrategy2;
+    });
+    elements.research4hOnly.forEach((element) => {
+        element.hidden = !isStrategy2;
+    });
+    elements.advancedExitTitle.textContent = isStrategy2
+        ? "吊灯止损"
+        : "高级退出";
+    elements.advancedExitScope.textContent = isStrategy2
+        ? "4h研究回测"
+        : "吊灯 / 分批止盈";
+    elements.executionGroupTitle.textContent = isStrategy2
+        ? "仓位约束"
+        : "扫描与重入";
+    elements.executionGroupScope.textContent = isStrategy2
+        ? "4h研究回测"
+        : "执行约束";
+    elements.refreshButtonLabel.textContent = isStrategy2
+        ? "立即扫描"
+        : "立即扫描";
+}
+
+function mergeResearch4hSections() {
+    const source = document.querySelector("#research4hSettingsSource");
+    if (!source) return;
+    const destinations = {
+        ".research-4h-filter-group": "#settingsTabFilter",
+        ".research-4h-filter-summary": "#settingsTabFilter",
+        ".research-4h-entry-group": "#settingsTabEntry",
+        ".research-4h-entry-summary": "#settingsTabEntry",
+        ".research-4h-exit-group": "#settingsTabExit",
+        ".research-4h-exit-summary": "#settingsTabExit",
+        ".research-4h-execution-summary": "#settingsTabExecution",
+    };
+    Object.entries(destinations).forEach(([selector, destinationSelector]) => {
+        const destination = document.querySelector(destinationSelector);
+        source.querySelectorAll(selector).forEach((element) => {
+            destination?.append(element);
+        });
+    });
+    source.remove();
+}
+
+function updateResearch4hRules() {
+    const values = currentResearch4hPayload();
+    const adaptive = values.take_profit_mode === "adaptive";
+    const trailing = ["adaptive", "trailing", "partial"].includes(
+        values.take_profit_mode,
+    );
+    elements.researchBreakoutSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", values.mode !== "breakout");
+    });
+    elements.researchPullbackSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", values.mode !== "pullback");
+    });
+    elements.researchMarketSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", !values.market_filter);
+    });
+    elements.researchTargetTrailingSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", !trailing);
+    });
+    elements.researchTargetPartialSettings.forEach((element) => {
+        element.classList.toggle(
+            "is-hidden",
+            values.take_profit_mode !== "partial",
+        );
+    });
+    elements.researchAdaptiveSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", !adaptive);
+    });
+    elements.researchMarketFilterLabel.textContent = values.market_filter
+        ? "开启"
+        : "关闭";
+    const modeLabels = {
+        fixed: "固定止盈",
+        adaptive: "自适应",
+        trailing: "ATR跟踪",
+        partial: "目标减仓",
+        none: "无目标",
+    };
+    elements.research4hModeBadge.textContent =
+        modeLabels[values.take_profit_mode] || "--";
+    elements.researchEntryModeBadge.textContent =
+        values.mode === "breakout" ? "突破" : "回踩";
+    elements.researchSetupRule.textContent = values.mode === "breakout"
+        ? `收盘突破此前${values.breakout_bars}根4h最高价`
+        : `回踩EMA20容差${values.touch_pct}%，阳线突破前高`;
+    elements.researchTrendRule.textContent =
+        `EMA20 > EMA50 > EMA100，EMA20斜率 > ${values.ema20_slope_min}%，ADX ≥ ${values.adx_min}`;
+    elements.researchQualityRule.textContent =
+        `RSI ${values.rsi_min}～${values.rsi_max}，量比 ≥ ${values.volume_factor}，ATR(14)占价格比例 ${values.atr_pct_min}%～${values.atr_pct_max}%`;
+    elements.researchMarketRule.textContent = values.market_filter
+        ? `BTC趋势过滤开启，BTC ADX ≥ ${values.market_adx_min}`
+        : "BTC趋势过滤关闭";
+    const targetLabels = {
+        fixed: `达到${values.reward_risk}R后全仓止盈`,
+        adaptive: `达到${values.reward_risk}R后判断是否进入强趋势跟踪`,
+        trailing: `达到${values.reward_risk}R后全部转ATR跟踪`,
+        partial: `达到${values.reward_risk}R后卖出${Math.round(values.target_partial_fraction * 100)}%`,
+        none: "不设固定R倍目标",
+    };
+    elements.researchTargetRule.textContent =
+        targetLabels[values.take_profit_mode];
+    elements.researchBreakEvenRule.textContent =
+        `浮盈达到${values.break_even_r}R后将保护线上移至保本`;
+    elements.researchAdaptiveRule.textContent = adaptive
+        ? `上一根4h：ADX ≥ ${values.target_hold_adx_min}、斜率 ≥ ${values.target_hold_slope_min}%、RSI ≥ ${values.target_hold_rsi_min}、量比 ≥ ${values.target_hold_volume_ratio_min}`
+        : "强趋势判定仅在自适应目标模式启用";
+    elements.researchTrailingRule.textContent = trailing
+        ? `保护基准${values.target_lock_r}R；峰值减${values.target_trailing_atr}×ATR(14)，取较高线`
+        : "ATR目标跟踪未启用";
+    elements.researchBaseExitRule.textContent =
+        `初始采用${elements.hardStoplossInput.value}%硬止损与摆动低点保护；收盘跌破EMA20或MA7下方${elements.ma7ExitThresholdInput.value}%时退出`;
+    const timeLabels = {
+        fixed: "到期退出",
+        runner: "强趋势尾仓可续持",
+        trend: "趋势有效时续持",
+        profitable: "盈利仓可续持",
+        none: "关闭持仓时限",
+    };
+    elements.researchTimeRule.textContent =
+        `基础最长${values.max_hold_bars * 4}小时；${timeLabels[values.time_exit_mode]}`;
+    elements.researchChandelierRule.textContent =
+        `吊灯止损：22根最高价 - ${values.chandelier_atr_multiplier} × ATR(22)`;
+    elements.researchMaxOpenTradesRule.textContent =
+        `最大同时持有 ${elements.maxOpenTradesInput.value} 个币种`;
+    const replacementBars = Number(
+        elements.replacementMinHoldBarsInput.value,
+    );
+    const replacementScore = Number(
+        elements.replacementMinScoreAdvantageInput.value,
+    );
+    elements.researchReplacementRule.textContent =
+        `换仓前至少持有${replacementBars * 4}小时；新候选评分高出${replacementScore}分时换仓`;
+}
+
+function validateResearch4hSettings() {
+    const values = currentResearch4hPayload();
+    const numericInputs = Object.values(elements.research4h).filter(
+        (input) => input?.tagName === "INPUT" && input.type !== "checkbox",
+    );
+    const invalidInput = numericInputs.find((input) => !input.checkValidity());
+    if (invalidInput) {
+        return `${invalidInput.closest("label")?.querySelector("span")?.textContent?.trim() || "4h参数"}超出允许范围`;
+    }
+    if (values.rsi_max <= values.rsi_min) {
+        return "RSI上限必须大于RSI下限";
+    }
+    if (values.atr_pct_max <= values.atr_pct_min) {
+        return "ATR占价格比例上限必须大于下限";
+    }
+    return "";
 }
 
 function priceDecimals(value) {
@@ -390,7 +792,9 @@ async function loadCandidates({
     reloadChart = false,
 } = {}) {
     try {
-        const payload = await fetchJson("/api/candidates");
+        const payload = await fetchJson(
+            `/api/candidates?active_strategy=${encodeURIComponent(state.activeStrategy)}`,
+        );
         state.candidates = payload.candidates || [];
         elements.candidateCount.textContent = String(state.candidates.length);
         elements.previewBadge.hidden = !payload.is_preview;
@@ -427,10 +831,13 @@ async function loadCandidates({
     }
 }
 
-async function loadSettings() {
+async function loadSettings(strategy = state.activeStrategy) {
     try {
-        const settings = await fetchJson("/api/settings");
-        elements.strategyTimeframeInput.value = settings.strategy_timeframe || "1d";
+        const settings = await fetchJson(
+            `/api/settings?active_strategy=${encodeURIComponent(strategy)}`,
+        );
+        state.activeStrategy = settings.active_strategy || strategy;
+        elements.activeStrategyInput.value = state.activeStrategy;
         const scanSeconds = Number(settings.candidate_scan_interval_seconds);
         elements.scanIntervalInput.value = Number.isFinite(scanSeconds)
             ? Math.round((scanSeconds / 3600) * 10) / 10
@@ -468,6 +875,13 @@ async function loadSettings() {
             settings.chandelier_exit_enabled ?? false;
         elements.partialTakeProfitEnabledInput.checked =
             settings.partial_take_profit_enabled ?? false;
+        elements.candidateReplacementEnabledInput.checked =
+            settings.candidate_replacement_enabled ?? false;
+        elements.replacementMinScoreAdvantageInput.value =
+            settings.replacement_min_score_advantage ?? 0;
+        elements.replacementMinHoldBarsInput.value =
+            settings.replacement_min_hold_bars ?? 2;
+        setResearch4hValues(settings.research_4h);
         elements.drawdownProtectionDetails.open =
             elements.drawdownStopModeInput.value !== "off";
         elements.advancedExitDetails.open =
@@ -477,6 +891,8 @@ async function loadSettings() {
         elements.candidateReentryRequiredInput.checked =
             settings.candidate_reentry_required;
         elements.cooldownHoursInput.value = settings.cooldown_hours;
+        updateResearch4hVisibility();
+        initializeSettingsTabs();
         updateFilterRuleValues();
         state.settingsDirty = false;
         elements.saveSettingsButton.disabled = true;
@@ -492,14 +908,17 @@ function markSettingsDirty() {
 }
 
 function activateSettingsTab(tabName, focus = false) {
-    const tabs = Array.from(
+    const allTabs = Array.from(
         elements.settingsTabs.querySelectorAll("[data-settings-tab]"),
+    );
+    const tabs = allTabs.filter(
+        (tab) => !tab.classList.contains("is-hidden"),
     );
     const target = tabs.some((tab) => tab.dataset.settingsTab === tabName)
         ? tabName
         : "filter";
     state.settingsTab = target;
-    tabs.forEach((tab) => {
+    allTabs.forEach((tab) => {
         const active = tab.dataset.settingsTab === target;
         tab.classList.toggle("active", active);
         tab.setAttribute("aria-selected", String(active));
@@ -531,7 +950,7 @@ function initializeSettingsTabs() {
 
 function currentSettingsPayload() {
     return {
-        strategy_timeframe: elements.strategyTimeframeInput.value,
+        active_strategy: elements.activeStrategyInput.value,
         entry_enabled: elements.entryEnabledInput.checked,
         max_open_trades: Number(elements.maxOpenTradesInput.value),
         lookback_days: Number(elements.lookbackDaysInput.value),
@@ -540,7 +959,7 @@ function currentSettingsPayload() {
         max_drawdown_to_gain_ratio_pct: Number(
             elements.maxDrawdownToGainRatioInput.value,
         ),
-        use_4h_ma_filter: elements.strategyTimeframeInput.value === "4h",
+        use_4h_ma_filter: true,
         use_ma99_filter: elements.useMa99FilterInput.checked,
         ma7_reclaim_enabled: elements.ma7ReclaimEnabledInput.checked,
         ma7_reclaim_tolerance_pct: Number(
@@ -564,17 +983,25 @@ function currentSettingsPayload() {
             elements.dynamicMaxProfitGivebackInput.value,
         ),
         chandelier_exit_enabled: elements.chandelierExitEnabledInput.checked,
-        partial_take_profit_enabled:
-            elements.partialTakeProfitEnabledInput.checked,
+        partial_take_profit_enabled: false,
+        candidate_replacement_enabled:
+            elements.candidateReplacementEnabledInput.checked,
+        replacement_min_score_advantage: Number(
+            elements.replacementMinScoreAdvantageInput.value,
+        ),
+        replacement_min_hold_bars: Number(
+            elements.replacementMinHoldBarsInput.value,
+        ),
         cooldown_enabled: elements.cooldownEnabledInput.checked,
         cooldown_hours: Number(elements.cooldownHoursInput.value),
         candidate_scan_interval_seconds:
             Math.round(Number(elements.scanIntervalInput.value) * 3600),
+        research_4h: currentResearch4hPayload(),
     };
 }
 
-function applyStrategyPreset(timeframe) {
-    const preset = STRATEGY_PRESETS[timeframe] || STRATEGY_PRESETS["1d"];
+function applyStrategyPreset(preset) {
+    elements.entryEnabledInput.checked = preset.entry_enabled;
     elements.maxOpenTradesInput.value = preset.max_open_trades ?? 1;
     elements.lookbackDaysInput.value = preset.lookback_days;
     elements.minChange20dInput.value = preset.min_change_20d;
@@ -590,7 +1017,12 @@ function applyStrategyPreset(timeframe) {
     elements.ma7ExitThresholdInput.value = preset.ma7_exit_threshold_pct;
     elements.hardStoplossInput.value = preset.hard_stoploss_pct;
     elements.drawdownStopModeInput.value =
-        preset.dynamic_drawdown_stop_enabled ? "dynamic" : "off";
+        preset.dynamic_drawdown_stop_enabled
+            ? "dynamic"
+            : preset.peak_drawdown_stop_enabled
+                ? "static"
+                : "off";
+    elements.peakDrawdownStopInput.value = preset.peak_drawdown_stop_pct;
     elements.dynamicDrawdownActivationInput.value =
         preset.dynamic_drawdown_activation_pct;
     elements.dynamicMaxProfitGivebackInput.value =
@@ -599,6 +1031,16 @@ function applyStrategyPreset(timeframe) {
         preset.chandelier_exit_enabled;
     elements.partialTakeProfitEnabledInput.checked =
         preset.partial_take_profit_enabled;
+    elements.candidateReplacementEnabledInput.checked =
+        preset.candidate_replacement_enabled;
+    elements.replacementMinScoreAdvantageInput.value =
+        preset.replacement_min_score_advantage;
+    elements.replacementMinHoldBarsInput.value =
+        preset.replacement_min_hold_bars;
+    elements.noProgressExitEnabledInput.checked =
+        preset.no_progress_exit_enabled;
+    elements.candidateReentryRequiredInput.checked =
+        preset.candidate_reentry_required;
     elements.drawdownProtectionDetails.open =
         preset.dynamic_drawdown_stop_enabled;
     elements.advancedExitDetails.open =
@@ -606,8 +1048,28 @@ function applyStrategyPreset(timeframe) {
     elements.cooldownEnabledInput.checked = preset.cooldown_enabled;
     elements.cooldownHoursInput.value = preset.cooldown_hours;
     elements.scanIntervalInput.value = preset.candidate_scan_interval_hours;
+    if (preset.research_4h) {
+        setResearch4hValues(preset.research_4h);
+    }
+    updateResearch4hVisibility();
     updateFilterRuleValues();
     markSettingsDirty();
+}
+
+function applyActiveStrategy(strategy) {
+    state.activeStrategy = strategy;
+    const isStrategy2 = strategy === "strategy2";
+    applyStrategyPreset(
+        isStrategy2 ? STRATEGY2_PRESET : STRATEGY1_PRESET,
+    );
+    if (isStrategy2) {
+        state.sortKey = "score_desc";
+        elements.sortSelect.value = state.sortKey;
+    } else {
+        state.sortKey = "default";
+        elements.sortSelect.value = state.sortKey;
+    }
+    filterCandidates();
 }
 
 function updateFilterRuleValues() {
@@ -646,14 +1108,20 @@ function updateFilterRuleValues() {
     const chandelierExitEnabled = elements.chandelierExitEnabledInput.checked;
     const partialTakeProfitEnabled =
         elements.partialTakeProfitEnabledInput.checked;
+    const candidateReplacementEnabled =
+        elements.candidateReplacementEnabledInput.checked;
+    const replacementMinScoreAdvantage = Number(
+        elements.replacementMinScoreAdvantageInput.value,
+    );
+    const replacementMinHoldBars = Number(
+        elements.replacementMinHoldBarsInput.value,
+    );
     const cooldownEnabled = elements.cooldownEnabledInput.checked;
     const candidateReentryRequired =
         elements.candidateReentryRequiredInput.checked;
     const cooldownHours = Number(elements.cooldownHoursInput.value);
-    const maTimeframe =
-        elements.strategyTimeframeInput.value === "4h" ? "4h" : "日K";
-    elements.ma7ReclaimLookbackUnit.textContent =
-        elements.strategyTimeframeInput.value === "4h" ? "根4h K线" : "日";
+    const maTimeframe = "4h";
+    elements.ma7ReclaimLookbackUnit.textContent = "根4h K线";
     const lookbackText = Number.isInteger(lookbackDays)
         ? `${lookbackDays}日`
         : "--日";
@@ -679,6 +1147,11 @@ function updateFilterRuleValues() {
         : "";
     elements.ma7ReclaimEnabledLabel.textContent =
         elements.ma7ReclaimEnabledInput.checked ? "开启" : "关闭";
+    const isStrategy2 =
+        elements.activeStrategyInput.value === "strategy2";
+    elements.ma7ReclaimGroup.hidden = isStrategy2;
+    elements.ma7ReclaimGroupTitle.textContent = "MA7 回踩确认";
+    elements.ma7ReclaimGroupScope.textContent = "4h入场信号";
     elements.lookbackDaysTexts.forEach((element) => {
         element.textContent = lookbackText;
     });
@@ -742,6 +1215,23 @@ function updateFilterRuleValues() {
         `分批止盈：盈利15%减半仓，剩余仓位回撤5%卖出（${
             partialTakeProfitEnabled ? "开启" : "关闭"
         }）`;
+    elements.candidateReplacementEnabledLabel.textContent =
+        candidateReplacementEnabled ? "开启" : "关闭";
+    elements.candidateReplacementSettings.forEach((element) => {
+        element.classList.toggle("is-hidden", !candidateReplacementEnabled);
+    });
+    elements.candidateReplacementRuleSection.classList.toggle(
+        "is-hidden",
+        !candidateReplacementEnabled,
+    );
+    elements.candidateReplacementRule.textContent =
+        `至少持有 ${Number.isInteger(replacementMinHoldBars)
+            ? `${replacementMinHoldBars * 4}小时`
+            : "--"} 后，新候选评分严格高出 ${
+            Number.isFinite(replacementMinScoreAdvantage)
+                ? `${replacementMinScoreAdvantage}分`
+                : "--"
+        } 时换仓（${candidateReplacementEnabled ? "开启" : "关闭"}）`;
     elements.cooldownEnabledLabel.textContent = cooldownEnabled ? "开启" : "关闭";
     elements.cooldownDurationSetting.classList.toggle(
         "is-hidden",
@@ -774,6 +1264,7 @@ function updateFilterRuleValues() {
     elements.entryEnabledRule.textContent = entryEnabled
         ? "进入候选列表后直接买入"
         : "禁止所有新买入，现有持仓继续执行卖出";
+    updateResearch4hRules();
 }
 
 async function saveSettings() {
@@ -798,7 +1289,18 @@ async function saveSettings() {
     const dynamicMaxProfitGiveback = Number(
         elements.dynamicMaxProfitGivebackInput.value,
     );
+    const replacementMinScoreAdvantage = Number(
+        elements.replacementMinScoreAdvantageInput.value,
+    );
+    const replacementMinHoldBars = Number(
+        elements.replacementMinHoldBarsInput.value,
+    );
     const cooldownHours = Number(elements.cooldownHoursInput.value);
+    const research4hError = validateResearch4hSettings();
+    if (research4hError) {
+        elements.settingsStatus.textContent = research4hError;
+        return;
+    }
     if (!Number.isInteger(lookbackDays) || lookbackDays < 2 || lookbackDays > 364) {
         elements.settingsStatus.textContent = "统计周期请输入 2～364 的整数";
         return;
@@ -876,6 +1378,22 @@ async function saveSettings() {
         return;
     }
     if (
+        !Number.isFinite(replacementMinScoreAdvantage)
+        || replacementMinScoreAdvantage < 0
+        || replacementMinScoreAdvantage > 100
+    ) {
+        elements.settingsStatus.textContent = "换仓评分优势请输入 0～100";
+        return;
+    }
+    if (
+        !Number.isInteger(replacementMinHoldBars)
+        || replacementMinHoldBars < 1
+        || replacementMinHoldBars > 24
+    ) {
+        elements.settingsStatus.textContent = "换仓前最短持有请输入 1～24 根4h K线";
+        return;
+    }
+    if (
         !Number.isFinite(cooldownHours)
         || cooldownHours < 0.1
         || cooldownHours > 168
@@ -912,9 +1430,11 @@ async function saveSettings() {
             ? "参数已保存，预览候选已正式用于交易"
             : "参数已保存；筛选条件将在扫描后生效";
         await loadCandidates({ reloadChart: true });
+        return true;
     } catch (error) {
         elements.settingsStatus.textContent = `保存失败：${error.message}`;
         elements.saveSettingsButton.disabled = false;
+        return false;
     }
 }
 
@@ -1035,9 +1555,9 @@ function backtestExitReason(reason) {
         dynamic_peak_drawdown: "动态锁盈",
         no_progress_12h: "无进展",
         stop_loss: "止损",
-        break_even_stop: "保本止损",
         peak_drawdown: "最高点回撤",
         take_profit: "固定止盈",
+        break_even_stop: "保本止损",
         ema20_exit: "EMA20",
         time_exit: "最长持仓",
         ma7_exit: "MA7",
@@ -1046,6 +1566,7 @@ function backtestExitReason(reason) {
         chandelier_exit: "吊灯止损",
         trailing_stop_loss: "吊灯止损（动态止损触发）",
         partial_trailing_stop: "分批止盈后移动止损",
+        market_data_ended: "行情中断/下架",
         end_of_backtest: "区间结束",
     };
     return reasons[reason] || reason || "--";
@@ -1388,10 +1909,12 @@ function renderBacktestResult(result) {
         summary.profit_factor === null ? "--" : Number(summary.profit_factor).toFixed(2);
     elements.backtestDateRange.textContent =
         `${formatBacktestDate(summary.start)} 至 ${formatBacktestDate(summary.end)}`;
-    elements.backtestStatusMeta.textContent =
-        result.meta.execution_timeframe === "4h"
-            ? `${result.meta.days || "--"} 天 · 4h策略 · 4h成交`
-            : `${result.meta.days || "--"} 天 · 30 分钟选股 · 15 分钟成交`;
+    const resultStrategy = result.meta.active_strategy || "strategy1";
+    elements.backtestStatusMeta.textContent = resultStrategy === "strategy2"
+        ? `${result.meta.days || "--"} 天 · 策略2 · 4h队列 / 15m成交`
+        : result.meta.execution_timeframe === "4h"
+            ? `${result.meta.days || "--"} 天 · 策略1 · 4h成交`
+            : `${result.meta.days || "--"} 天 · 策略1 · 30分钟选股 / 15m成交`;
     elements.backtestUniverseMeta.textContent =
         `${result.meta.processed_pairs}/${result.meta.universe_size} 个交易对 · ${
             result.meta.scan_timeframe
@@ -1451,13 +1974,17 @@ async function startBacktest() {
         elements.backtestStatusText.textContent = "初始资金请输入 100～10000000";
         return;
     }
+    if (state.settingsDirty && !(await saveSettings())) {
+        elements.backtestStatusText.textContent = "请先修正并保存策略参数";
+        return;
+    }
     elements.runBacktestButton.disabled = true;
     elements.backtestStatusText.textContent = "正在启动回测...";
-    const strategyTimeframe = elements.strategyTimeframeInput.value;
+    const activeStrategy = elements.activeStrategyInput.value;
     elements.backtestStatusMeta.textContent =
-        strategyTimeframe === "4h"
-            ? `${days} 天 · 4h策略 · 4h成交`
-            : `${days} 天 · 30 分钟选股 · 15 分钟成交`;
+        activeStrategy === "strategy2"
+            ? `${days} 天 · 策略2 · 4h队列 / 15m成交`
+            : `${days} 天 · 策略1 · 4h成交`;
     try {
         const status = await fetchJson("/api/backtest", {
             method: "POST",
@@ -1465,7 +1992,7 @@ async function startBacktest() {
             body: JSON.stringify({
                 days,
                 initial_balance: initialBalance,
-                strategy_timeframe: strategyTimeframe,
+                active_strategy: activeStrategy,
             }),
         });
         applyBacktestStatus(status);
@@ -1509,6 +2036,8 @@ function filterCandidates() {
 // always sink to the bottom regardless of direction so incomplete rows never
 // crowd out the meaningful ones. "default" keeps the backend rank order.
 const SORT_OPTIONS = {
+    score_desc: { field: "entry_score", direction: -1 },
+    score_asc: { field: "entry_score", direction: 1 },
     change_desc: { field: "change_20d", direction: -1 },
     change_asc: { field: "change_20d", direction: 1 },
     drawdown_desc: { field: "drawdown_20d", direction: -1 },
@@ -1539,19 +2068,23 @@ function sortCandidates(candidates) {
 // sort.
 function candidateSubline(candidate) {
     const option = SORT_OPTIONS[state.sortKey];
+    const score = `评分 ${formatScore(candidate.entry_score)}`;
     if (option && option.field === "change_20d") {
         const value = candidate.change_20d;
         return value === null || value === undefined
-            ? "涨幅 --"
-            : `${value >= 0 ? "+" : ""}${value.toFixed(2)}% 涨幅`;
+            ? `涨幅 -- · ${score}`
+            : `${value >= 0 ? "+" : ""}${value.toFixed(2)}% 涨幅 · ${score}`;
     }
     if (option && option.field === "drawdown_20d") {
         const value = candidate.drawdown_20d;
         return value === null || value === undefined
-            ? "回撤 --"
-            : `-${value.toFixed(2)}% 回撤`;
+            ? `回撤 -- · ${score}`
+            : `-${value.toFixed(2)}% 回撤 · ${score}`;
     }
-    return `24h ${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
+    if (option && option.field === "entry_score") {
+        return `${score} · 24h ${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
+    }
+    return `${score} · 24h ${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
 }
 
 function renderCandidateList() {
@@ -1565,7 +2098,7 @@ function renderCandidateList() {
     }
 
     const fragment = document.createDocumentFragment();
-    state.filteredCandidates.forEach((candidate) => {
+    state.filteredCandidates.forEach((candidate, index) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `candidate-item${candidate.pair === state.selectedPair ? " active" : ""}`;
@@ -1574,7 +2107,10 @@ function renderCandidateList() {
 
         const rank = document.createElement("span");
         rank.className = "rank";
-        rank.textContent = String(candidate.rank).padStart(2, "0");
+        const displayedRank = state.sortKey === "default"
+            ? candidate.rank
+            : index + 1;
+        rank.textContent = String(displayedRank).padStart(2, "0");
 
         const identity = document.createElement("span");
         const symbol = document.createElement("span");
@@ -1607,7 +2143,10 @@ function updateCandidateMetrics() {
     if (!candidate) return;
 
     elements.pairName.textContent = candidate.pair;
-    elements.provisionalBadge.hidden = !candidate.is_provisional_daily_candle;
+    elements.provisionalBadge.hidden = (
+        elements.activeStrategyInput.value === "strategy2"
+        || !candidate.is_provisional_daily_candle
+    );
     const change20d = candidate.change_20d;
     elements.change20dValue.textContent = change20d === null
         ? "--"
@@ -1620,13 +2159,18 @@ function updateCandidateMetrics() {
         ? "--"
         : `-${drawdown20d.toFixed(2)}%`;
     elements.volume24h.textContent = `${formatQuoteVolume(candidate.quote_volume_24h)} USDT`;
+    elements.entryScore.textContent = formatScore(candidate.entry_score);
+    elements.entryScoreDetail.textContent = (
+        `ADX ${formatScore(candidate.adx_4h)} · `
+        + `量比 ${formatScore(candidate.relative_volume_4h)}`
+    );
 }
 
 async function loadChart({ resetView = false, forceRefresh = false } = {}) {
     const pair = state.selectedPair;
     if (!pair) return;
 
-    const cacheKey = `${pair}|${state.timeframe}`;
+    const cacheKey = `${state.activeStrategy}|${pair}|${state.timeframe}`;
     const cached = state.candleCache.get(cacheKey);
     const now = Date.now();
 
@@ -1654,6 +2198,7 @@ async function loadChart({ resetView = false, forceRefresh = false } = {}) {
             pair,
             timeframe: state.timeframe,
             limit: "365",
+            active_strategy: state.activeStrategy,
         });
         if (forceRefresh) params.set("refresh", "true");
         const payload = await fetchJson(`/api/candles?${params}`);
@@ -2131,7 +2676,7 @@ elements.settingsTabs.addEventListener("keydown", (event) => {
     event.preventDefault();
     const tabs = Array.from(
         elements.settingsTabs.querySelectorAll("[data-settings-tab]"),
-    );
+    ).filter((tab) => !tab.classList.contains("is-hidden"));
     const currentIndex = tabs.findIndex(
         (tab) => tab.dataset.settingsTab === state.settingsTab,
     );
@@ -2264,6 +2809,28 @@ elements.partialTakeProfitEnabledInput.addEventListener("change", () => {
     updateFilterRuleValues();
     markSettingsDirty();
 });
+elements.candidateReplacementEnabledInput.addEventListener("change", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.replacementMinScoreAdvantageInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+elements.replacementMinHoldBarsInput.addEventListener("input", () => {
+    updateFilterRuleValues();
+    markSettingsDirty();
+});
+Object.values(elements.research4h).forEach((input) => {
+    if (!input) return;
+    const eventName = input.tagName === "SELECT" || input.type === "checkbox"
+        ? "change"
+        : "input";
+    input.addEventListener(eventName, () => {
+        updateResearch4hRules();
+        markSettingsDirty();
+    });
+});
 elements.cooldownEnabledInput.addEventListener("change", () => {
     updateFilterRuleValues();
     markSettingsDirty();
@@ -2292,8 +2859,10 @@ elements.scanIntervalInput.addEventListener("keydown", (event) => {
         elements.scanIntervalInput.blur();
     }
 });
-elements.strategyTimeframeInput.addEventListener("change", (event) => {
-    applyStrategyPreset(event.target.value);
+elements.activeStrategyInput.addEventListener("change", async (event) => {
+    applyActiveStrategy(event.target.value);
+    await loadSettings(event.target.value);
+    await loadCandidates({ preserveSelection: false, reloadChart: true });
 });
 elements.saveSettingsButton.addEventListener("click", saveSettings);
 elements.refreshButton.addEventListener("click", startManualScan);
@@ -2405,7 +2974,7 @@ elements.logoutButton.addEventListener("click", () => {
 function initializeApp() {
     if (appInitialized) return;
     appInitialized = true;
-    initializeSettingsTabs();
+    mergeResearch4hSections();
     loadSettings();
     loadCandidates({ preserveSelection: false, reloadChart: true });
     loadBacktestStatus();
@@ -2416,6 +2985,11 @@ bootstrapAuth();
 
 async function startManualScan() {
     if (elements.refreshButton.disabled) return;
+
+    if (state.activeStrategy === "strategy2" && state.settingsDirty) {
+        elements.settingsStatus.textContent = "请先保存策略2参数，再立即扫描";
+        return;
+    }
 
     elements.refreshButton.disabled = true;
     elements.saveSettingsButton.disabled = true;
@@ -2428,10 +3002,13 @@ async function startManualScan() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
         };
-        if (state.settingsDirty) {
+        if (state.settingsDirty && state.activeStrategy === "strategy1") {
             request.body = JSON.stringify(currentSettingsPayload());
         }
-        let status = await fetchJson("/api/scan", request);
+        let status = await fetchJson(
+            `/api/scan?active_strategy=${encodeURIComponent(state.activeStrategy)}`,
+            request,
+        );
         while (status.running) {
             await new Promise((resolve) => window.setTimeout(resolve, 1000));
             status = await fetchJson("/api/scan/status");
@@ -2440,7 +3017,7 @@ async function startManualScan() {
         if (status.return_code === 0) {
             elements.settingsStatus.textContent = status.is_preview
                 ? "预览完成；满意后点击“保存参数”用于交易"
-                : "正式候选已更新";
+                : `${state.activeStrategy === "strategy2" ? "策略2" : "策略1"}候选已更新`;
             state.candleCache.clear();
             await loadCandidates({ reloadChart: true });
         } else {

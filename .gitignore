@@ -3,6 +3,7 @@
 *.sqlite-shm
 *.sqlite-wal
 user_data/config_private.json
+user_data/backtest_market_data/
 logfile.txt
 freqtrade-plot.html
 freqtrade-profit-plot.html

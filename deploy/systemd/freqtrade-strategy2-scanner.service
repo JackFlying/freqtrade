@@ -1,0 +1,21 @@
+[Unit]
+Description=Freqtrade strategy2 candidate scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/freqtrade
+ExecStart=/opt/freqtrade/.venv/bin/python -u user_data/scripts/screen_daily_trend.py --config user_data/config_strategy2_dry.json --settings-file user_data/config_strategy2_parameters.json --loop --retry-delay-seconds 60
+Restart=always
+RestartSec=10
+Nice=15
+CPUWeight=10
+CPUQuota=20%
+MemoryHigh=300M
+MemoryMax=450M
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target

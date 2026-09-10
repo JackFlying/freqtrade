@@ -5,6 +5,8 @@ import csv
 import hmac
 import json
 import math
+import os
+import signal
 import shutil
 import sys
 import time
@@ -29,6 +31,10 @@ CONFIG_PATH = ROOT_DIR / "user_data/config_scan.json"
 RESULTS_DIR = ROOT_DIR / "user_data/scan_results"
 CANDIDATES_PATH = RESULTS_DIR / "daily_trend_candidates.csv"
 STATUS_PATH = RESULTS_DIR / "daily_trend_status.json"
+STRATEGY2_RESULTS_DIR = RESULTS_DIR / "strategy2"
+STRATEGY2_CANDIDATES_PATH = STRATEGY2_RESULTS_DIR / "daily_trend_candidates.csv"
+STRATEGY2_STATUS_PATH = STRATEGY2_RESULTS_DIR / "daily_trend_status.json"
+STRATEGY2_SETTINGS_PATH = ROOT_DIR / "user_data/config_strategy2_parameters.json"
 PREVIEW_RESULTS_DIR = RESULTS_DIR / "preview"
 PREVIEW_CANDIDATES_PATH = PREVIEW_RESULTS_DIR / "daily_trend_candidates.csv"
 PREVIEW_STATUS_PATH = PREVIEW_RESULTS_DIR / "daily_trend_status.json"
@@ -37,16 +43,28 @@ BACKTEST_RESULTS_DIR = ROOT_DIR / "user_data/backtest_results"
 BACKTEST_RESULT_PATH = BACKTEST_RESULTS_DIR / "latest.json"
 BACKTEST_STATUS_PATH = BACKTEST_RESULTS_DIR / "status.json"
 BACKTEST_4H_RAW_PATH = BACKTEST_RESULTS_DIR / "research_4h_latest.json"
+BACKTEST_DYNAMIC_4H_RAW_PATH = (
+    BACKTEST_RESULTS_DIR / "dynamic_4h_15m_dashboard_latest.json"
+)
+FIXED_4H_540D_SNAPSHOT = (
+    ROOT_DIR
+    / "user_data/backtest_snapshots/"
+    "binance_usdt_spot_20250316T0000_20260907T0000.json"
+)
+FIXED_4H_540D_START = "2025-03-16T00:00:00Z"
+FIXED_4H_540D_END = "2026-09-07T00:00:00Z"
 ALLOWED_TIMEFRAMES = {"15m", "1h", "4h", "1d"}
 OHLCV_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 MA_PERIODS = (7, 20, 99)
 SCREENING_SETTING_KEYS = {
+    "active_strategy",
     "min_change_20d",
     "max_change_20d",
     "max_drawdown_to_gain_ratio_pct",
     "lookback_days",
     "use_4h_ma_filter",
     "use_ma99_filter",
+    "research_4h",
 }
 
 app = FastAPI(title="Freqtrade Strategy Console", docs_url=None, redoc_url=None)
@@ -98,7 +116,7 @@ async def require_authentication(request: Request, call_next):
     return await call_next(request)
 
 
-_response_cache: dict[tuple[str, str, int], tuple[float, dict[str, Any]]] = {}
+_response_cache: dict[tuple[str, str, str, int], tuple[float, dict[str, Any]]] = {}
 # Daily candles come from the local feather cache and change at most once a day,
 # so they can be cached longer. Intraday candles are fetched live from Binance;
 # their recent history barely changes, so a modest cache spares repeated network
@@ -107,7 +125,7 @@ _CANDLE_CACHE_TTL = {"1d": 300.0}
 _CANDLE_CACHE_TTL_DEFAULT = 60.0
 # Validating the requested pair against the candidate list would otherwise
 # re-parse the CSV on every /api/candles call. Cache it briefly instead.
-_candidate_pairs_cache: tuple[float, set[str]] | None = None
+_candidate_pairs_cache: dict[str, tuple[float, set[str]]] = {}
 _CANDIDATE_PAIRS_TTL = 10.0
 _scan_state: dict[str, Any] = {
     "running": False,
@@ -122,8 +140,44 @@ _backtest_process: asyncio.subprocess.Process | None = None
 _daily_open_locks: dict[str, asyncio.Lock] = {}
 
 
+class Research4hSettings(BaseModel):
+    scan_interval_minutes: Literal[240] = 240
+    dynamic_entry_enabled: bool = False
+    candidate_queue_refill_enabled: bool = True
+    candidate_queue_exclude_exited: bool = True
+    mode: Literal["breakout", "pullback"] = "breakout"
+    adx_min: float = Field(default=22.0, ge=0, le=100)
+    rsi_min: float = Field(default=38.0, ge=0, le=100)
+    rsi_max: float = Field(default=68.0, ge=0, le=100)
+    volume_factor: float = Field(default=0.4, ge=0, le=20)
+    touch_pct: float = Field(default=2.5, ge=0, le=20)
+    breakout_bars: Literal[4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 30] = 10
+    market_filter: bool = True
+    reward_risk: float = Field(default=3.2, gt=0, le=20)
+    break_even_r: float = Field(default=4.0, ge=0, le=20)
+    max_hold_bars: int = Field(default=18, ge=1, le=720)
+    ema20_slope_min: float = Field(default=-0.1, ge=-10, le=10)
+    atr_pct_min: float = Field(default=0.4, ge=0, le=100)
+    atr_pct_max: float = Field(default=9.0, gt=0, le=100)
+    market_adx_min: float = Field(default=12.0, ge=0, le=100)
+    take_profit_mode: Literal[
+        "fixed", "adaptive", "trailing", "partial", "none"
+    ] = "adaptive"
+    target_trailing_atr: float = Field(default=1.0, gt=0, le=20)
+    time_exit_mode: Literal[
+        "fixed", "trend", "profitable", "runner", "none"
+    ] = "runner"
+    chandelier_atr_multiplier: float = Field(default=4.0, gt=0, le=20)
+    target_partial_fraction: float = Field(default=0.75, gt=0, lt=1)
+    target_lock_r: float = Field(default=2.0, ge=0, le=20)
+    target_hold_adx_min: float = Field(default=40.0, ge=0, le=100)
+    target_hold_slope_min: float = Field(default=0.1, ge=-10, le=10)
+    target_hold_rsi_min: float = Field(default=70.0, ge=0, le=100)
+    target_hold_volume_ratio_min: float = Field(default=1.0, ge=0, le=20)
+
+
 class DashboardSettings(BaseModel):
-    strategy_timeframe: Literal["1d", "4h"] = "1d"
+    active_strategy: Literal["strategy1", "strategy2"] = "strategy1"
     max_open_trades: int = Field(default=1, ge=1, le=4)
     min_change_20d: float = Field(ge=-100, le=10000)
     max_change_20d: float = Field(ge=-100, le=10000)
@@ -143,18 +197,24 @@ class DashboardSettings(BaseModel):
     dynamic_max_profit_giveback_pct: float = Field(default=5.0, ge=0.5, le=50)
     chandelier_exit_enabled: bool = True
     partial_take_profit_enabled: bool = True
+    candidate_replacement_enabled: bool = False
+    replacement_min_score_advantage: float = Field(default=0.0, ge=0, le=100)
+    replacement_min_hold_bars: int = Field(default=2, ge=1, le=24)
     no_progress_exit_enabled: bool = False
     candidate_reentry_required: bool = False
     cooldown_enabled: bool = False
     cooldown_hours: float = Field(default=4.0, ge=0.1, le=168)
     entry_enabled: bool = True
     candidate_scan_interval_seconds: int = Field(default=900, ge=60, le=86400)
+    research_4h: Research4hSettings = Field(
+        default_factory=Research4hSettings
+    )
 
 
 class BacktestRequest(BaseModel):
     days: int = Field(default=30, ge=7, le=540)
     initial_balance: float = Field(default=1000.0, ge=100, le=10000000)
-    strategy_timeframe: Literal["1d", "4h"] = "1d"
+    active_strategy: Literal["strategy1", "strategy2"] = "strategy1"
 
 
 class LoginRequest(BaseModel):
@@ -207,9 +267,16 @@ def preview_active() -> bool:
     return PREVIEW_CANDIDATES_PATH.exists() and PREVIEW_STATUS_PATH.exists()
 
 
-def read_candidates(path: Path | None = None) -> list[dict[str, Any]]:
+def read_candidates(
+    strategy: Literal["strategy1", "strategy2"] = "strategy1",
+    path: Path | None = None,
+) -> list[dict[str, Any]]:
     candidate_path = path or (
-        PREVIEW_CANDIDATES_PATH if preview_active() else CANDIDATES_PATH
+        STRATEGY2_CANDIDATES_PATH
+        if strategy == "strategy2"
+        else PREVIEW_CANDIDATES_PATH
+        if preview_active()
+        else CANDIDATES_PATH
     )
     if not candidate_path.exists():
         return []
@@ -226,6 +293,11 @@ def read_candidates(path: Path | None = None) -> list[dict[str, Any]]:
                     "ma_7": parse_number(row.get("ma_7")),
                     "ma_20": parse_number(row.get("ma_20")),
                     "ma_99": parse_number(row.get("ma_99")),
+                    "adx_4h": parse_number(row.get("adx_4h")),
+                    "relative_volume_4h": parse_number(
+                        row.get("relative_volume_4h")
+                    ),
+                    "entry_score": parse_number(row.get("entry_score")),
                     "change_20d": parse_number(row.get("change_20d")),
                     "drawdown_20d": parse_number(row.get("drawdown_20d")),
                     "quote_volume_24h": parse_number(row["quote_volume_24h"]),
@@ -239,24 +311,39 @@ def read_candidates(path: Path | None = None) -> list[dict[str, Any]]:
     return candidates
 
 
-def candidate_pairs_cached() -> set[str]:
-    global _candidate_pairs_cache
+def candidate_pairs_cached(
+    strategy: Literal["strategy1", "strategy2"] = "strategy1",
+) -> set[str]:
     now = time.monotonic()
-    if _candidate_pairs_cache and now - _candidate_pairs_cache[0] < _CANDIDATE_PAIRS_TTL:
-        return _candidate_pairs_cache[1]
-    pairs = {item["pair"] for item in read_candidates()}
-    _candidate_pairs_cache = (now, pairs)
+    cached = _candidate_pairs_cache.get(strategy)
+    if cached and now - cached[0] < _CANDIDATE_PAIRS_TTL:
+        return cached[1]
+    pairs = {item["pair"] for item in read_candidates(strategy)}
+    _candidate_pairs_cache[strategy] = (now, pairs)
     return pairs
 
 
-def read_status(path: Path | None = None) -> dict[str, Any]:
-    status_path = path or (PREVIEW_STATUS_PATH if preview_active() else STATUS_PATH)
+def read_status(
+    strategy: Literal["strategy1", "strategy2"] = "strategy1",
+    path: Path | None = None,
+) -> dict[str, Any]:
+    status_path = path or (
+        STRATEGY2_STATUS_PATH
+        if strategy == "strategy2"
+        else PREVIEW_STATUS_PATH
+        if preview_active()
+        else STATUS_PATH
+    )
     if not status_path.exists():
         return {}
     return json.loads(status_path.read_text(encoding="utf-8"))
 
 
-def runtime_settings_path() -> Path:
+def runtime_settings_path(
+    strategy: Literal["strategy1", "strategy2"] = "strategy1",
+) -> Path:
+    if strategy == "strategy2":
+        return STRATEGY2_SETTINGS_PATH
     config = read_config()
     path = (
         ROOT_DIR
@@ -267,11 +354,14 @@ def runtime_settings_path() -> Path:
     return path
 
 
-def read_runtime_settings() -> dict[str, Any]:
+def read_runtime_settings(
+    strategy: Literal["strategy1", "strategy2"] = "strategy1",
+) -> dict[str, Any]:
     scanner_config = read_config()["scanner"]["daily_trend"]
     default_interval = int(scanner_config["update_interval_seconds"])
     defaults = {
-        "strategy_timeframe": "1d",
+        "active_strategy": strategy,
+        "strategy_timeframe": "4h",
         "max_open_trades": 1,
         "min_change_20d": 5.0,
         "max_change_20d": 100.0,
@@ -291,27 +381,36 @@ def read_runtime_settings() -> dict[str, Any]:
         "dynamic_max_profit_giveback_pct": 5.0,
         "chandelier_exit_enabled": True,
         "partial_take_profit_enabled": True,
+        "candidate_replacement_enabled": False,
+        "replacement_min_score_advantage": 0.0,
+        "replacement_min_hold_bars": 2,
         "no_progress_exit_enabled": False,
         "candidate_reentry_required": False,
         "cooldown_enabled": False,
         "cooldown_hours": 4.0,
         "entry_enabled": True,
         "candidate_scan_interval_seconds": default_interval,
+        "research_4h": Research4hSettings().model_dump(),
     }
-    path = runtime_settings_path()
+    path = runtime_settings_path(strategy)
     if not path.exists():
         return defaults
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        stored_timeframe = payload.get("strategy_timeframe")
-        if stored_timeframe not in {"1d", "4h"}:
-            # Older runtime files did not persist the selector. The 4h MA
-            # filter is the unambiguous marker for those saved 4h presets.
-            stored_timeframe = (
-                "4h" if payload.get("use_4h_ma_filter") is True else "1d"
-            )
+        stored_research = payload.get("research_4h")
+        normalized_research = Research4hSettings(
+            **{
+                **defaults["research_4h"],
+                **(
+                    stored_research
+                    if isinstance(stored_research, dict)
+                    else {}
+                ),
+            }
+        ).model_dump()
         return {
-            "strategy_timeframe": stored_timeframe,
+            "active_strategy": strategy,
+            "strategy_timeframe": "4h",
             "max_open_trades": max(
                 1,
                 min(4, int(payload.get("max_open_trades", defaults["max_open_trades"]))),
@@ -433,6 +532,36 @@ def read_runtime_settings() -> dict[str, Any]:
                     defaults["partial_take_profit_enabled"],
                 )
             ),
+            "candidate_replacement_enabled": bool(
+                payload.get(
+                    "candidate_replacement_enabled",
+                    defaults["candidate_replacement_enabled"],
+                )
+            ),
+            "replacement_min_score_advantage": max(
+                0.0,
+                min(
+                    100.0,
+                    float(
+                        payload.get(
+                            "replacement_min_score_advantage",
+                            defaults["replacement_min_score_advantage"],
+                        )
+                    ),
+                ),
+            ),
+            "replacement_min_hold_bars": max(
+                1,
+                min(
+                    24,
+                    int(
+                        payload.get(
+                            "replacement_min_hold_bars",
+                            defaults["replacement_min_hold_bars"],
+                        )
+                    ),
+                ),
+            ),
             "no_progress_exit_enabled": bool(
                 payload.get(
                     "no_progress_exit_enabled",
@@ -475,6 +604,7 @@ def read_runtime_settings() -> dict[str, Any]:
                     ),
                 ),
             ),
+            "research_4h": normalized_research,
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return defaults
@@ -483,15 +613,16 @@ def read_runtime_settings() -> dict[str, Any]:
 def write_runtime_settings(
     settings: DashboardSettings,
 ) -> dict[str, Any]:
-    path = runtime_settings_path()
+    path = runtime_settings_path(settings.active_strategy)
     payload = {
-        "strategy_timeframe": settings.strategy_timeframe,
+        "active_strategy": settings.active_strategy,
+        "strategy_timeframe": "4h",
         "max_open_trades": settings.max_open_trades,
         "min_change_20d": settings.min_change_20d,
         "max_change_20d": settings.max_change_20d,
         "max_drawdown_to_gain_ratio_pct": settings.max_drawdown_to_gain_ratio_pct,
         "lookback_days": settings.lookback_days,
-        "use_4h_ma_filter": settings.use_4h_ma_filter,
+        "use_4h_ma_filter": True,
         "use_ma99_filter": settings.use_ma99_filter,
         "ma7_reclaim_enabled": settings.ma7_reclaim_enabled,
         "ma7_reclaim_tolerance_pct": settings.ma7_reclaim_tolerance_pct,
@@ -505,12 +636,18 @@ def write_runtime_settings(
         "dynamic_max_profit_giveback_pct": settings.dynamic_max_profit_giveback_pct,
         "chandelier_exit_enabled": settings.chandelier_exit_enabled,
         "partial_take_profit_enabled": settings.partial_take_profit_enabled,
+        "candidate_replacement_enabled": settings.candidate_replacement_enabled,
+        "replacement_min_score_advantage": (
+            settings.replacement_min_score_advantage
+        ),
+        "replacement_min_hold_bars": settings.replacement_min_hold_bars,
         "no_progress_exit_enabled": settings.no_progress_exit_enabled,
         "candidate_reentry_required": settings.candidate_reentry_required,
         "cooldown_enabled": settings.cooldown_enabled,
         "cooldown_hours": settings.cooldown_hours,
         "entry_enabled": settings.entry_enabled,
         "candidate_scan_interval_seconds": settings.candidate_scan_interval_seconds,
+        "research_4h": settings.research_4h.model_dump(),
     }
     temp_path = path.with_suffix(".json.tmp")
     temp_path.write_text(
@@ -523,13 +660,14 @@ def write_runtime_settings(
 
 def settings_payload(settings: DashboardSettings) -> dict[str, Any]:
     return {
-        "strategy_timeframe": settings.strategy_timeframe,
+        "active_strategy": settings.active_strategy,
+        "strategy_timeframe": "4h",
         "max_open_trades": settings.max_open_trades,
         "min_change_20d": settings.min_change_20d,
         "max_change_20d": settings.max_change_20d,
         "max_drawdown_to_gain_ratio_pct": settings.max_drawdown_to_gain_ratio_pct,
         "lookback_days": settings.lookback_days,
-        "use_4h_ma_filter": settings.use_4h_ma_filter,
+        "use_4h_ma_filter": True,
         "use_ma99_filter": settings.use_ma99_filter,
         "ma7_reclaim_enabled": settings.ma7_reclaim_enabled,
         "ma7_reclaim_tolerance_pct": settings.ma7_reclaim_tolerance_pct,
@@ -543,12 +681,18 @@ def settings_payload(settings: DashboardSettings) -> dict[str, Any]:
         "dynamic_max_profit_giveback_pct": settings.dynamic_max_profit_giveback_pct,
         "chandelier_exit_enabled": settings.chandelier_exit_enabled,
         "partial_take_profit_enabled": settings.partial_take_profit_enabled,
+        "candidate_replacement_enabled": settings.candidate_replacement_enabled,
+        "replacement_min_score_advantage": (
+            settings.replacement_min_score_advantage
+        ),
+        "replacement_min_hold_bars": settings.replacement_min_hold_bars,
         "no_progress_exit_enabled": settings.no_progress_exit_enabled,
         "candidate_reentry_required": settings.candidate_reentry_required,
         "cooldown_enabled": settings.cooldown_enabled,
         "cooldown_hours": settings.cooldown_hours,
         "entry_enabled": settings.entry_enabled,
         "candidate_scan_interval_seconds": settings.candidate_scan_interval_seconds,
+        "research_4h": settings.research_4h.model_dump(),
     }
 
 
@@ -799,7 +943,7 @@ async def prewarm_daily_open_caches() -> None:
                 return
 
     await asyncio.gather(
-        *(prewarm_pair(candidate["pair"]) for candidate in read_candidates())
+        *(prewarm_pair(candidate["pair"]) for candidate in read_candidates("strategy1"))
     )
 
 
@@ -887,23 +1031,32 @@ async def current_user(request: Request) -> dict[str, str]:
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "candidate_count": len(read_candidates())}
+    return {
+        "status": "ok",
+        "candidate_count": len(read_candidates("strategy1")),
+        "strategy2_candidate_count": len(read_candidates("strategy2")),
+    }
 
 
 @app.get("/api/candidates")
-async def candidates() -> dict[str, Any]:
-    items = read_candidates()
+async def candidates(
+    active_strategy: Literal["strategy1", "strategy2"] = Query("strategy1"),
+) -> dict[str, Any]:
+    items = read_candidates(active_strategy)
     return {
         "candidates": items,
-        "status": read_status(),
-        "is_preview": preview_active(),
+        "status": read_status(active_strategy),
+        "is_preview": active_strategy == "strategy1" and preview_active(),
+        "active_strategy": active_strategy,
         "timeframes": sorted(ALLOWED_TIMEFRAMES, key=("15m", "1h", "4h", "1d").index),
     }
 
 
 @app.get("/api/settings")
-async def get_settings() -> dict[str, Any]:
-    return read_runtime_settings()
+async def get_settings(
+    active_strategy: Literal["strategy1", "strategy2"] = Query("strategy1"),
+) -> dict[str, Any]:
+    return read_runtime_settings(active_strategy)
 
 
 @app.put("/api/settings")
@@ -916,7 +1069,11 @@ async def update_settings(settings: DashboardSettings) -> dict[str, Any]:
             detail="最大涨幅必须大于最小涨幅",
         )
     saved_settings = write_runtime_settings(settings)
-    promoted = promote_preview_if_matching(settings)
+    promoted = (
+        promote_preview_if_matching(settings)
+        if settings.active_strategy == "strategy1"
+        else False
+    )
     return {
         "status": "saved",
         "settings": saved_settings,
@@ -924,19 +1081,29 @@ async def update_settings(settings: DashboardSettings) -> dict[str, Any]:
     }
 
 
-async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
+async def run_manual_scan(
+    active_strategy: Literal["strategy1", "strategy2"] = "strategy1",
+    settings: DashboardSettings | None = None,
+) -> None:
     async with _scan_lock:
-        is_preview = settings is not None
+        is_strategy2 = active_strategy == "strategy2"
+        is_preview = settings is not None and not is_strategy2
         if is_preview:
             write_preview_settings(settings)
+        strategy_label = "策略2" if is_strategy2 else "策略1"
         _scan_state.update(
             {
                 "running": True,
+                "active_strategy": active_strategy,
                 "is_preview": is_preview,
                 "started_at": pd.Timestamp.now(tz="UTC").isoformat(),
                 "finished_at": None,
                 "return_code": None,
-                "message": "正在预览草稿参数..." if is_preview else "正在刷新成交额、日线和 MA...",
+                "message": (
+                    "正在预览草稿参数..."
+                    if is_preview
+                    else f"正在扫描{strategy_label}候选..."
+                ),
             }
         )
         command = [
@@ -944,7 +1111,16 @@ async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
             str(ROOT_DIR / "user_data/scripts/screen_daily_trend.py"),
             "--refresh-universe",
         ]
-        if is_preview:
+        if is_strategy2:
+            command.extend(
+                [
+                    "--config",
+                    str(ROOT_DIR / "user_data/config_strategy2_dry.json"),
+                    "--settings-file",
+                    str(STRATEGY2_SETTINGS_PATH),
+                ]
+            )
+        elif is_preview:
             command.extend(
                 [
                     "--settings-file",
@@ -958,6 +1134,7 @@ async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
             cwd=ROOT_DIR,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
         output_bytes, _ = await process.communicate()
         output = output_bytes.decode("utf-8", errors="replace").strip()
@@ -965,8 +1142,7 @@ async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
 
         if process.returncode == 0:
             _response_cache.clear()
-            global _candidate_pairs_cache
-            _candidate_pairs_cache = None
+            _candidate_pairs_cache.clear()
             asyncio.create_task(prewarm_daily_open_caches())
             message = (
                 "预览完成，结果尚未用于交易"
@@ -989,13 +1165,18 @@ async def run_manual_scan(settings: DashboardSettings | None = None) -> None:
 
 
 @app.post("/api/scan")
-async def start_scan(settings: DashboardSettings | None = None) -> dict[str, Any]:
+async def start_scan(
+    active_strategy: Literal["strategy1", "strategy2"] = Query("strategy1"),
+    settings: DashboardSettings | None = None,
+) -> dict[str, Any]:
     if _backtest_lock.locked():
         raise HTTPException(status_code=409, detail="回测进行中，请完成后再扫描")
     if _scan_state["running"] or _scan_lock.locked():
         return _scan_state.copy()
+    if settings is not None and settings.active_strategy != active_strategy:
+        raise HTTPException(status_code=422, detail="策略选择与参数不一致")
 
-    asyncio.create_task(run_manual_scan(settings))
+    asyncio.create_task(run_manual_scan(active_strategy, settings))
     await asyncio.sleep(0)
     return _scan_state.copy()
 
@@ -1026,12 +1207,33 @@ def write_json_file(path: Path, payload: dict[str, Any]) -> None:
 def normalize_4h_backtest_result(
     raw_payload: dict[str, Any],
     days: int,
+    active_strategy: Literal["strategy1", "strategy2"] = "strategy1",
 ) -> dict[str, Any]:
-    raw_result = raw_payload.get("result")
+    is_strategy2 = active_strategy == "strategy2"
+    raw_result = raw_payload if is_strategy2 else raw_payload.get("result")
     if not isinstance(raw_result, dict) or not raw_result.get("summary"):
         raise ValueError("4h 回测未返回有效结果")
 
     data = raw_payload.get("data") or {}
+    if is_strategy2:
+        data = {
+            "pairs": 0,
+            "universe_snapshot": str(FIXED_4H_540D_SNAPSHOT),
+        }
+    snapshot_metadata: dict[str, Any] = {}
+    snapshot_value = data.get("universe_snapshot")
+    if snapshot_value:
+        snapshot_path = Path(str(snapshot_value))
+        if snapshot_path.exists():
+            snapshot_payload = read_json_file(snapshot_path)
+            snapshot_metadata = {
+                "path": str(snapshot_path),
+                "pair_count": int(snapshot_payload.get("pair_count", 0)),
+                "pair_set_sha256": snapshot_payload.get("pair_set_sha256"),
+                "data_set_sha256": snapshot_payload.get("data_set_sha256"),
+                "start": snapshot_payload.get("start"),
+                "end": snapshot_payload.get("end"),
+            }
     summary = raw_result["summary"]
     trades = []
     for trade in raw_result.get("trades", []):
@@ -1047,17 +1249,24 @@ def normalize_4h_backtest_result(
         "meta": {
             "generated_at": generated_at,
             "days": days,
+            "active_strategy": active_strategy,
             "strategy_timeframe": "4h",
             "scan_timeframe": "4h",
-            "execution_timeframe": "4h",
-            "universe_size": int(data.get("pairs", 0)),
-            "processed_pairs": int(data.get("pairs", 0)),
+            "execution_timeframe": "15m" if is_strategy2 else "4h",
+            "universe_size": int(
+                snapshot_metadata.get("pair_count", data.get("pairs", 0))
+            ),
+            "processed_pairs": int(
+                snapshot_metadata.get("pair_count", data.get("pairs", 0))
+            ),
             "error_count": 0,
             "errors": [],
             "fee_rate": 0.001,
             "settings": raw_result.get("parameters", {}),
+            "universe_snapshot": snapshot_metadata,
             "survivorship_bias_notice": (
-                "使用当前可交易池回放，不包含历史期间已退市交易对。"
+                "使用 Binance 历史 USDT 现货主表，包含区间内已下架交易对；"
+                "历史 Monitoring/Seed 标签无官方时序数据，未做追溯过滤。"
             ),
         },
         "summary": {
@@ -1098,39 +1307,71 @@ async def run_backtest(request: BacktestRequest) -> None:
     global _backtest_process
     async with _backtest_lock:
         BACKTEST_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        is_strategy2 = request.active_strategy == "strategy2"
+        is_4h = True
+        strategy_label = "策略2" if is_strategy2 else "策略1"
         initial_status = {
             "running": True,
             "progress": 0.0,
             "message": (
-                f"正在准备 {request.days} 天 4h 回测..."
-                if request.strategy_timeframe == "4h" and request.days > 180
-                else "正在启动 4h 回测..."
-                if request.strategy_timeframe == "4h"
-                else "正在启动回测..."
+                f"正在准备 {request.days} 天{strategy_label}回测..."
+                if is_4h and request.days > 180
+                else f"正在启动{strategy_label}回测..."
             ),
             "started_at": pd.Timestamp.now(tz="UTC").isoformat(),
         }
         write_json_file(BACKTEST_STATUS_PATH, initial_status)
-        is_4h = request.strategy_timeframe == "4h"
-        runtime_settings = read_runtime_settings()
-        output_path = BACKTEST_4H_RAW_PATH if is_4h else BACKTEST_RESULT_PATH
-        command = [
-            sys.executable,
-            str(
-                ROOT_DIR
-                / (
-                    "user_data/scripts/research_4h_strategy.py"
-                    if is_4h
-                    else "user_data/scripts/backtest_daily_trend.py"
-                )
-            ),
-            "--days",
-            str(request.days),
-            "--initial-balance",
-            str(request.initial_balance),
-            "--output",
-            str(output_path),
-        ]
+        runtime_settings = read_runtime_settings(request.active_strategy)
+        output_path = (
+            BACKTEST_DYNAMIC_4H_RAW_PATH
+            if is_strategy2
+            else BACKTEST_4H_RAW_PATH
+            if is_4h
+            else BACKTEST_RESULT_PATH
+        )
+        if is_strategy2:
+            fixed_end = pd.Timestamp(FIXED_4H_540D_END)
+            fixed_start = max(
+                pd.Timestamp(FIXED_4H_540D_START),
+                fixed_end - pd.Timedelta(days=request.days),
+            )
+            command = [
+                sys.executable,
+                str(
+                    ROOT_DIR
+                    / "user_data/scripts/dynamic_4h_15m_backtest.py"
+                ),
+                "--snapshot",
+                str(FIXED_4H_540D_SNAPSHOT),
+                "--parameters",
+                str(runtime_settings_path(request.active_strategy)),
+                "--start",
+                fixed_start.isoformat(),
+                "--end",
+                fixed_end.isoformat(),
+                "--initial-balance",
+                str(request.initial_balance),
+                "--output",
+                str(output_path),
+            ]
+        else:
+            command = [
+                sys.executable,
+                str(
+                    ROOT_DIR
+                    / (
+                        "user_data/scripts/research_4h_strategy.py"
+                        if is_4h
+                        else "user_data/scripts/backtest_daily_trend.py"
+                    )
+                ),
+                "--days",
+                str(request.days),
+                "--initial-balance",
+                str(request.initial_balance),
+                "--output",
+                str(output_path),
+            ]
         if not is_4h:
             command.extend(
                 [
@@ -1138,11 +1379,13 @@ async def run_backtest(request: BacktestRequest) -> None:
                     str(BACKTEST_STATUS_PATH),
                 ]
             )
-        else:
+        elif not is_strategy2:
             command.extend(
                 [
                     "--status-path",
                     str(BACKTEST_STATUS_PATH),
+                    "--parameters-path",
+                    str(runtime_settings_path(request.active_strategy)),
                     "--ma7-exit-threshold-pct",
                     str(runtime_settings["ma7_exit_threshold_pct"]),
                     "--stop-pct",
@@ -1153,13 +1396,35 @@ async def run_backtest(request: BacktestRequest) -> None:
                 command.append("--chandelier-exit-enabled")
             if runtime_settings["partial_take_profit_enabled"]:
                 command.append("--partial-take-profit-enabled")
-            if request.days > 180:
-                command.append("--refresh-cache")
+            if runtime_settings["candidate_replacement_enabled"]:
+                command.extend(
+                    [
+                        "--candidate-replacement-enabled",
+                        "--replacement-min-score-advantage",
+                        str(runtime_settings["replacement_min_score_advantage"]),
+                        "--replacement-min-hold-bars",
+                        str(runtime_settings["replacement_min_hold_bars"]),
+                    ]
+                )
+            if request.days == 540 and FIXED_4H_540D_SNAPSHOT.exists():
+                command.extend(
+                    [
+                        "--start",
+                        FIXED_4H_540D_START,
+                        "--end",
+                        FIXED_4H_540D_END,
+                        "--universe-snapshot",
+                        str(FIXED_4H_540D_SNAPSHOT),
+                    ]
+                )
+            else:
+                command.append("--historical-market")
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=ROOT_DIR,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
         _backtest_process = process
         try:
@@ -1179,14 +1444,15 @@ async def run_backtest(request: BacktestRequest) -> None:
             elif is_4h:
                 try:
                     normalized_result = normalize_4h_backtest_result(
-                        read_json_file(BACKTEST_4H_RAW_PATH),
+                        read_json_file(output_path),
                         request.days,
+                        request.active_strategy,
                     )
                     write_json_file(BACKTEST_RESULT_PATH, normalized_result)
                     write_backtest_status(
                         running=False,
                         progress=100.0,
-                        message="4h 回测完成",
+                        message=f"{strategy_label}回测完成",
                         finished_at=pd.Timestamp.now(tz="UTC").isoformat(),
                     )
                 except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -1206,6 +1472,15 @@ async def start_backtest(request: BacktestRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="已有回测任务正在运行")
     if _scan_state["running"] or _scan_lock.locked():
         raise HTTPException(status_code=409, detail="候选扫描进行中，请稍后再运行回测")
+    if request.active_strategy == "strategy2" and not FIXED_4H_540D_SNAPSHOT.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="策略2历史回测数据尚未部署到服务器，实时模拟不受影响",
+        )
+    if request.active_strategy != read_runtime_settings(
+        request.active_strategy
+    )["active_strategy"]:
+        raise HTTPException(status_code=409, detail="请先保存当前策略再运行回测")
     asyncio.create_task(run_backtest(request))
     await asyncio.sleep(0)
     return read_json_file(BACKTEST_STATUS_PATH)
@@ -1216,7 +1491,7 @@ async def cancel_backtest() -> dict[str, Any]:
     process = _backtest_process
     if process is None or process.returncode is not None:
         raise HTTPException(status_code=409, detail="当前没有运行中的回测")
-    process.terminate()
+    os.killpg(process.pid, signal.SIGTERM)
     cancelled_status = {
         "running": False,
         "progress": 0.0,
@@ -1255,14 +1530,15 @@ async def candles(
     timeframe: str = Query("1d"),
     limit: int = Query(300, ge=120, le=500),
     refresh: bool = Query(False),
+    active_strategy: Literal["strategy1", "strategy2"] = Query("strategy1"),
 ) -> dict[str, Any]:
     if timeframe not in ALLOWED_TIMEFRAMES:
         raise HTTPException(status_code=400, detail="Unsupported timeframe")
 
-    if pair not in candidate_pairs_cached():
+    if pair not in candidate_pairs_cached(active_strategy):
         raise HTTPException(status_code=404, detail="Pair is not a current candidate")
 
-    cache_key = (pair, timeframe, limit)
+    cache_key = (active_strategy, pair, timeframe, limit)
     cached = _response_cache.get(cache_key)
     ttl = _CANDLE_CACHE_TTL.get(timeframe, _CANDLE_CACHE_TTL_DEFAULT)
     if not refresh and cached and time.monotonic() - cached[0] < ttl:

@@ -56,6 +56,7 @@ HYPEROPT_BUILTIN_SPACE_OPTIONS = ["default", "all"] + HYPEROPT_BUILTIN_SPACES
 
 AVAILABLE_PAIRLISTS = [
     "StaticPairList",
+    "Strategy2QueuePairList",
     "VolumePairList",
     "PercentChangePairList",
     "ProducerPairList",

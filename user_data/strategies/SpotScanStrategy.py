@@ -4,14 +4,23 @@ import math
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sys
 
 import pandas as pd
 from pandas import DataFrame
 from talib import abstract as ta
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from freqtrade.exchange import timeframe_to_prev_date
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy, informative, stoploss_from_absolute
+from user_data.asset_filters import (
+    is_tokenized_stock_metadata,
+    is_tokenized_stock_pair,
+)
 
 
 BINANCE_ASSET_METADATA_URL = (
@@ -93,12 +102,18 @@ class SpotScanStrategy(IStrategy):
     }
     order_time_in_force = {"entry": "GTC", "exit": "GTC"}
 
-    plot_config = {
-        "main_plot": {
-            "ma7_1d": {"color": "#0788b5"},
-            "ma7_4h": {"color": "#0788b5"},
-        },
-    }
+    @property
+    def plot_config(self) -> dict:
+        self._load_trade_settings()
+        suffix = self._strategy_timeframe
+        return {
+            "main_plot": {
+                f"ma7_{suffix}": {"color": "#0788b5"},
+                f"chandelier_stop_{suffix}": {"color": "#0f766e"},
+                "partial_take_profit_15pct": {"color": "#dc3f56"},
+                "partial_trailing_stop_5pct": {"color": "#d97706"},
+            },
+        }
 
     @informative("1d")
     def populate_indicators_1d(
@@ -140,6 +155,80 @@ class SpotScanStrategy(IStrategy):
             self.chandelier_atr_period,
             min_periods=self.chandelier_atr_period,
         ).max()
+        dataframe["chandelier_stop"] = (
+            dataframe["chandelier_high"]
+            - dataframe["chandelier_atr"] * self.chandelier_atr_multiplier
+        )
+        return dataframe
+
+    def _add_active_trade_plot_lines(
+        self,
+        dataframe: DataFrame,
+        pair: str,
+    ) -> DataFrame:
+        dataframe["partial_take_profit_15pct"] = float("nan")
+        dataframe["partial_trailing_stop_5pct"] = float("nan")
+        self._load_trade_settings()
+        if (
+            not self._partial_take_profit_enabled
+            or dataframe.empty
+            or "date" not in dataframe.columns
+        ):
+            return dataframe
+        try:
+            open_trades = Trade.get_trades_proxy(pair=pair, is_open=True)
+        except (AttributeError, TypeError):
+            return dataframe
+        if not open_trades:
+            return dataframe
+
+        trade = max(open_trades, key=lambda item: item.open_date_utc)
+        dates = pd.to_datetime(dataframe["date"], utc=True)
+        active = dates >= timeframe_to_prev_date(
+            self.timeframe,
+            trade.open_date_utc,
+        )
+        if not active.any():
+            return dataframe
+
+        dataframe.loc[active, "partial_take_profit_15pct"] = (
+            trade.open_rate * (1 + self.partial_take_profit_trigger)
+        )
+        if trade.nr_of_successful_exits < 1:
+            return dataframe
+
+        exit_times = [
+            order.order_filled_utc or order.order_date_utc
+            for order in trade.select_filled_orders(trade.exit_side)
+        ]
+        if not exit_times:
+            return dataframe
+        trailing_start = timeframe_to_prev_date(
+            self.timeframe,
+            min(exit_times),
+        )
+        running_peak = (
+            dataframe.loc[active, "high"]
+            .astype(float)
+            .cummax()
+            .clip(lower=float(trade.open_rate))
+        )
+        if not running_peak.empty:
+            running_peak.iloc[-1] = max(
+                float(running_peak.iloc[-1]),
+                float(
+                    getattr(trade, "max_rate", trade.open_rate)
+                    or trade.open_rate
+                ),
+            )
+        trailing_active = active & (dates >= trailing_start)
+        trailing_index = dataframe.index[trailing_active]
+        dataframe.loc[
+            trailing_index,
+            "partial_trailing_stop_5pct",
+        ] = running_peak.loc[trailing_index] * (
+            1 - self.partial_trailing_drawdown
+        )
         return dataframe
 
     def _load_candidate_pairs(self) -> set[str]:
@@ -191,12 +280,15 @@ class SpotScanStrategy(IStrategy):
                     pass
                 # #endregion
                 self._candidate_pairs = {
-                    row["pair"] for row in rows if row.get("pair")
+                    row["pair"]
+                    for row in rows
+                    if row.get("pair")
+                    and not is_tokenized_stock_pair(row["pair"])
                 }
                 self._candidate_quote_volumes = {}
                 for index, row in enumerate(rows):
                     pair = row.get("pair")
-                    if not pair:
+                    if not pair or is_tokenized_stock_pair(pair):
                         continue
                     try:
                         volume = float(row.get("quote_volume_24h") or 0)
@@ -259,6 +351,7 @@ class SpotScanStrategy(IStrategy):
                         str(tag).lower() in BINANCE_RISK_TAGS
                         for tag in tags
                     )
+                    or is_tokenized_stock_metadata(asset)
                     or asset.get("preDelist") is True
                     or asset.get("delisted") is True
                     or asset.get("trading") is False
@@ -769,10 +862,14 @@ class SpotScanStrategy(IStrategy):
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["is_daily_candidate"] = int(
-            metadata["pair"] in self._load_candidate_pairs()
+            not is_tokenized_stock_pair(metadata["pair"])
+            and metadata["pair"] in self._load_candidate_pairs()
         )
         dataframe["entry_enabled"] = int(self._load_entry_enabled())
-        return dataframe
+        return self._add_active_trade_plot_lines(
+            dataframe,
+            metadata["pair"],
+        )
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["enter_long"] = 0
@@ -816,6 +913,7 @@ class SpotScanStrategy(IStrategy):
     ) -> bool:
         allowed = (
             self._load_entry_enabled()
+            and not is_tokenized_stock_pair(pair)
             and not self._is_risk_pair(pair)
             and not self._entry_hits_chandelier_stop(pair, rate)
             and self._is_highest_score_entry(pair, current_time)

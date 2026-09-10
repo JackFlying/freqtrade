@@ -633,8 +633,11 @@ h3 {
 .pair-volume {
     display: block;
     margin-top: 3px;
+    overflow: hidden;
     color: var(--muted);
     font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .candidate-price {
@@ -932,6 +935,10 @@ h3 {
     font-size: 11px;
 }
 
+#activeStrategyInput {
+    width: 164px;
+}
+
 .settings-panel .filter-timeframe-toggle {
     min-width: 82px;
     justify-content: flex-end;
@@ -1119,6 +1126,16 @@ h3 {
     display: block;
     font-size: 15px;
     line-height: 1.25;
+    white-space: nowrap;
+}
+
+.metric small {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 9px;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
@@ -1976,6 +1993,10 @@ h3 {
 
     .settings-panel .parameter-select {
         width: 108px;
+    }
+
+    #activeStrategyInput {
+        width: 150px;
     }
 
     .settings-panel .parameter-value {

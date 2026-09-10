@@ -1,0 +1,24 @@
+[Unit]
+Description=Freqtrade strategy2 isolated dry-run bot
+After=network-online.target freqtrade-strategy2-scanner.service
+Wants=network-online.target freqtrade-strategy2-scanner.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/freqtrade
+Environment=FREQTRADE__DRY_RUN=true
+EnvironmentFile=-/etc/freqtrade-strategy2-api.env
+EnvironmentFile=-/etc/freqtrade-strategy2-telegram.env
+ExecStart=/opt/freqtrade/.venv/bin/freqtrade trade --config user_data/config_strategy2_dry.json
+Restart=always
+RestartSec=10
+Nice=10
+CPUWeight=20
+CPUQuota=30%
+MemoryHigh=300M
+MemoryMax=450M
+OOMScoreAdjust=300
+
+[Install]
+WantedBy=multi-user.target

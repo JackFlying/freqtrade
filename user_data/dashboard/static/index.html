@@ -68,7 +68,9 @@
                 <label class="sort-box">
                     <span>排序</span>
                     <select id="sortSelect">
-                        <option value="default">默认（成交额）</option>
+                        <option id="defaultSortOption" value="default">默认（成交额）</option>
+                        <option value="score_desc">候选评分（高→低）</option>
+                        <option value="score_asc">候选评分（低→高）</option>
                         <option value="change_desc">最大累计涨幅（高→低）</option>
                         <option value="change_asc">最大累计涨幅（低→高）</option>
                         <option value="drawdown_desc">区间高点最大回撤（大→小）</option>
@@ -129,6 +131,14 @@
                         <span>24h成交额</span>
                         <strong id="volume24h">--</strong>
                     </div>
+                    <div
+                        class="metric"
+                        title="ADX(14) + 当前4h成交量 / 20根4h平均成交量"
+                    >
+                        <span>候选评分</span>
+                        <strong id="entryScore">--</strong>
+                        <small id="entryScoreDetail">ADX -- · 量比 --</small>
+                    </div>
                 </div>
 
                 <div class="chart-card">
@@ -167,11 +177,14 @@
 
                 <div class="settings-scroll">
                     <div class="settings-primary">
-                        <label class="parameter-row parameter-row-primary" for="strategyTimeframeInput">
-                            <span><b>策略周期</b></span>
-                            <select id="strategyTimeframeInput" class="parameter-select">
-                                <option value="1d">日K策略</option>
-                                <option value="4h">4hK线策略</option>
+                        <label class="parameter-row parameter-row-primary" for="activeStrategyInput">
+                            <span>
+                                <b>当前策略</b>
+                                <small id="activeStrategyDescription">线上当前逻辑</small>
+                            </span>
+                            <select id="activeStrategyInput" class="parameter-select">
+                                <option value="strategy1">策略1（线上当前）</option>
+                                <option value="strategy2">策略2（4h候选队列）</option>
                             </select>
                         </label>
                     </div>
@@ -185,7 +198,7 @@
 
                     <div class="settings-tab-panels">
                         <section class="settings-tab-panel active" id="settingsTabFilter" role="tabpanel" data-settings-panel="filter">
-                            <div class="parameter-group">
+                            <div class="parameter-group scanner-only">
                                 <div class="parameter-group-title">
                                     <strong>统计与涨幅</strong>
                                     <span>核心</span>
@@ -221,7 +234,7 @@
                                     </label>
                                 </div>
                             </div>
-                            <div class="parameter-group">
+                            <div class="parameter-group scanner-only">
                                 <div class="parameter-group-title">
                                     <strong>趋势过滤</strong>
                                     <span>可选</span>
@@ -243,10 +256,10 @@
                         </section>
 
                         <section class="settings-tab-panel" id="settingsTabEntry" role="tabpanel" data-settings-panel="entry" hidden>
-                            <div class="parameter-group">
+                            <div class="parameter-group scanner-only" id="ma7ReclaimGroup">
                                 <div class="parameter-group-title">
-                                    <strong>MA7 回踩确认</strong>
-                                    <span>入场信号</span>
+                                    <strong id="ma7ReclaimGroupTitle">MA7 回踩确认</strong>
+                                    <span id="ma7ReclaimGroupScope">入场信号</span>
                                 </div>
                                 <div class="parameter-fields">
                                     <label class="parameter-row" for="ma7ReclaimEnabledInput">
@@ -296,7 +309,7 @@
                                             <b>%</b>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" for="noProgressExitEnabledInput">
+                                    <label class="parameter-row scanner-only" for="noProgressExitEnabledInput">
                                         <span>无进展止损</span>
                                         <span class="filter-timeframe-toggle">
                                             <b id="noProgressExitEnabledLabel">关闭</b>
@@ -307,7 +320,7 @@
                                 </div>
                             </div>
 
-                            <details class="parameter-details" id="drawdownProtectionDetails">
+                            <details class="parameter-details scanner-only" id="drawdownProtectionDetails">
                                 <summary>
                                     <span>
                                         <strong>回撤止损</strong>
@@ -351,8 +364,8 @@
                             <details class="parameter-details" id="advancedExitDetails">
                                 <summary>
                                     <span>
-                                        <strong>高级退出</strong>
-                                        <small>吊灯 / 分批止盈</small>
+                                        <strong id="advancedExitTitle">高级退出</strong>
+                                        <small id="advancedExitScope">吊灯 / 分批止盈</small>
                                     </span>
                                     <i aria-hidden="true"></i>
                                 </summary>
@@ -368,7 +381,7 @@
                                             <i aria-hidden="true"></i>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" for="partialTakeProfitEnabledInput">
+                                    <label class="parameter-row scanner-only" for="partialTakeProfitEnabledInput">
                                         <span>
                                             分批止盈
                                             <small>+15%减半，剩余回撤5%</small>
@@ -386,11 +399,11 @@
                         <section class="settings-tab-panel" id="settingsTabExecution" role="tabpanel" data-settings-panel="execution" hidden>
                             <div class="parameter-group">
                                 <div class="parameter-group-title">
-                                    <strong>扫描与重入</strong>
-                                    <span>执行约束</span>
+                                    <strong id="executionGroupTitle">扫描与重入</strong>
+                                    <span id="executionGroupScope">执行约束</span>
                                 </div>
                                 <div class="parameter-fields">
-                                    <label class="parameter-row" for="entryEnabledInput">
+                                    <label class="parameter-row scanner-only" for="entryEnabledInput">
                                         <span>
                                             允许新买入
                                             <small>交易总开关</small>
@@ -411,14 +424,14 @@
                                             <b>笔</b>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" for="scanIntervalInput">
+                                    <label class="parameter-row scanner-only" for="scanIntervalInput">
                                         <span>候选扫描频率</span>
                                         <span class="parameter-value">
                                             <input id="scanIntervalInput" type="number" min="0.1" max="24" step="0.1">
                                             <b>小时</b>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" for="cooldownEnabledInput">
+                                    <label class="parameter-row scanner-only" for="cooldownEnabledInput">
                                         <span>卖出后冷却</span>
                                         <span class="filter-timeframe-toggle">
                                             <b id="cooldownEnabledLabel">关闭</b>
@@ -426,14 +439,14 @@
                                             <i aria-hidden="true"></i>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" id="cooldownDurationSetting" for="cooldownHoursInput">
+                                    <label class="parameter-row scanner-only" id="cooldownDurationSetting" for="cooldownHoursInput">
                                         <span>冷却时长</span>
                                         <span class="parameter-value">
                                             <input id="cooldownHoursInput" type="number" min="0.1" max="168" step="0.1">
                                             <b>小时</b>
                                         </span>
                                     </label>
-                                    <label class="parameter-row" for="candidateReentryRequiredInput">
+                                    <label class="parameter-row scanner-only" for="candidateReentryRequiredInput">
                                         <span>重新入选后允许重入</span>
                                         <span class="filter-timeframe-toggle">
                                             <b id="candidateReentryRequiredLabel">关闭</b>
@@ -444,7 +457,41 @@
                                 </div>
                             </div>
 
-                            <details class="settings-rule-summary">
+                            <div class="parameter-group research-4h-only" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>回测候选换仓</strong>
+                                    <span>4h策略</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="candidateReplacementEnabledInput">
+                                        <span>
+                                            更高评分候选换仓
+                                            <small>仅影响4h研究回测</small>
+                                        </span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="candidateReplacementEnabledLabel">关闭</b>
+                                            <input id="candidateReplacementEnabledInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row candidate-replacement-setting" for="replacementMinScoreAdvantageInput">
+                                        <span>最低评分优势</span>
+                                        <span class="parameter-value">
+                                            <input id="replacementMinScoreAdvantageInput" type="number" min="0" max="100" step="1" value="0">
+                                            <b>分</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row candidate-replacement-setting" for="replacementMinHoldBarsInput">
+                                        <span>换仓前最短持有</span>
+                                        <span class="parameter-value">
+                                            <input id="replacementMinHoldBarsInput" type="number" min="1" max="24" step="1" value="2">
+                                            <b>根4h</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <details class="settings-rule-summary scanner-only">
                                 <summary>
                                     <span>执行前规则摘要</span>
                                     <b id="entryEnabledBadge">允许买入</b>
@@ -481,9 +528,358 @@
                                             <li id="candidateReentryRequiredRule">卖出后需退出候选池并重新入选才允许买入（关闭）</li>
                                         </ul>
                                     </div>
+                                    <div class="rule-section" id="candidateReplacementRuleSection">
+                                        <div class="rule-section-title">候选换仓</div>
+                                        <ul>
+                                            <li id="candidateReplacementRule">持仓满足最短时间后，换入评分更高的候选币（关闭）</li>
+                                        </ul>
+                                    </div>
                                 </div>
                             </details>
                         </section>
+
+                        <div id="research4hSettingsSource" hidden>
+                            <div class="parameter-group research-4h-only research-4h-entry-group" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>4h信号形态</strong>
+                                    <span>4h研究回测</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchModeInput">
+                                        <span>入场模式</span>
+                                        <select id="researchModeInput" class="parameter-select">
+                                            <option value="breakout">突破</option>
+                                            <option value="pullback">回踩</option>
+                                        </select>
+                                    </label>
+                                    <label class="parameter-row research-breakout-setting" for="researchBreakoutBarsInput">
+                                        <span>突破窗口</span>
+                                        <select id="researchBreakoutBarsInput" class="parameter-select">
+                                            <option value="4">4根</option>
+                                            <option value="6">6根</option>
+                                            <option value="8">8根</option>
+                                            <option value="10">10根</option>
+                                            <option value="12">12根</option>
+                                            <option value="14">14根</option>
+                                            <option value="16">16根</option>
+                                            <option value="18">18根</option>
+                                            <option value="20">20根</option>
+                                            <option value="24">24根</option>
+                                            <option value="30">30根</option>
+                                        </select>
+                                    </label>
+                                    <label class="parameter-row research-pullback-setting" for="researchTouchPctInput">
+                                        <span>EMA20回踩容差</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTouchPctInput" type="number" min="0" max="20" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="parameter-group research-4h-only research-4h-filter-group" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>4h质量过滤</strong>
+                                    <span>指标准入</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchAdxMinInput">
+                                        <span>ADX下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchAdxMinInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchRsiMinInput">
+                                        <span>RSI下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchRsiMinInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchRsiMaxInput">
+                                        <span>RSI上限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchRsiMaxInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchVolumeFactorInput">
+                                        <span>
+                                            成交量门槛
+                                            <small>当前量 / 20根均量</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchVolumeFactorInput" type="number" min="0" max="20" step="0.1">
+                                            <b>倍</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchEmaSlopeMinInput">
+                                        <span>EMA20三周期斜率</span>
+                                        <span class="parameter-value">
+                                            <input id="researchEmaSlopeMinInput" type="number" min="-10" max="10" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchAtrPctMinInput">
+                                        <span>
+                                            ATR占价格比例下限
+                                            <small>ATR(14) ÷ 当前收盘价 × 100%</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchAtrPctMinInput" type="number" min="0" max="100" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchAtrPctMaxInput">
+                                        <span>
+                                            ATR占价格比例上限
+                                            <small>过滤波动过大的标的</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchAtrPctMaxInput" type="number" min="0.1" max="100" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="parameter-group research-4h-only research-4h-filter-group" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>市场状态</strong>
+                                    <span>BTC过滤</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchMarketFilterInput">
+                                        <span>启用BTC趋势过滤</span>
+                                        <span class="filter-timeframe-toggle">
+                                            <b id="researchMarketFilterLabel">开启</b>
+                                            <input id="researchMarketFilterInput" type="checkbox">
+                                            <i aria-hidden="true"></i>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row research-market-setting" for="researchMarketAdxMinInput">
+                                        <span>BTC ADX下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchMarketAdxMinInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="parameter-group research-4h-only research-4h-exit-group" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>目标与保本</strong>
+                                    <span>1R = 单笔初始风险</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchRewardRiskInput">
+                                        <span>
+                                            初始目标
+                                            <small>1R = 入场价 - 初始止损价</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchRewardRiskInput" type="number" min="0.1" max="20" step="0.1">
+                                            <b>R</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchBreakEvenRInput">
+                                        <span>
+                                            保本启动
+                                            <small>浮盈达到该R倍后上移保护线</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchBreakEvenRInput" type="number" min="0" max="20" step="0.1">
+                                            <b>R</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchTakeProfitModeInput">
+                                        <span>目标处理方式</span>
+                                        <select id="researchTakeProfitModeInput" class="parameter-select">
+                                            <option value="fixed">固定止盈</option>
+                                            <option value="adaptive">强趋势跟踪</option>
+                                            <option value="trailing">全部跟踪</option>
+                                            <option value="partial">目标位减仓</option>
+                                            <option value="none">无目标</option>
+                                        </select>
+                                    </label>
+                                    <label class="parameter-row research-target-trailing-setting" for="researchTargetTrailingAtrInput">
+                                        <span>目标后ATR距离</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetTrailingAtrInput" type="number" min="0.1" max="20" step="0.1">
+                                            <b>ATR</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row research-target-trailing-setting" for="researchTargetLockRInput">
+                                        <span>
+                                            目标保护基准
+                                            <small>以初始风险1R为计算单位</small>
+                                        </span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetLockRInput" type="number" min="0" max="20" step="0.1">
+                                            <b>R</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row research-target-partial-setting" for="researchTargetPartialFractionInput">
+                                        <span>目标位卖出比例</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetPartialFractionInput" type="number" min="1" max="99" step="1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="parameter-group research-4h-only research-4h-exit-group research-adaptive-setting" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>强趋势续持</strong>
+                                    <span>上一根已收盘4h</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchTargetHoldAdxInput">
+                                        <span>强趋势ADX下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetHoldAdxInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchTargetHoldSlopeInput">
+                                        <span>强趋势EMA20斜率</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetHoldSlopeInput" type="number" min="-10" max="10" step="0.1">
+                                            <b>%</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchTargetHoldRsiInput">
+                                        <span>强趋势RSI下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetHoldRsiInput" type="number" min="0" max="100" step="1">
+                                            <b>点</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchTargetHoldVolumeInput">
+                                        <span>强趋势量比下限</span>
+                                        <span class="parameter-value">
+                                            <input id="researchTargetHoldVolumeInput" type="number" min="0" max="20" step="0.1">
+                                            <b>倍</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="parameter-group research-4h-only research-4h-exit-group" hidden>
+                                <div class="parameter-group-title">
+                                    <strong>时间与吊灯退出</strong>
+                                    <span>动态退出</span>
+                                </div>
+                                <div class="parameter-fields">
+                                    <label class="parameter-row" for="researchMaxHoldBarsInput">
+                                        <span>基础最长持有</span>
+                                        <span class="parameter-value">
+                                            <input id="researchMaxHoldBarsInput" type="number" min="1" max="720" step="1">
+                                            <b>根4h</b>
+                                        </span>
+                                    </label>
+                                    <label class="parameter-row" for="researchTimeExitModeInput">
+                                        <span>到期处理方式</span>
+                                        <select id="researchTimeExitModeInput" class="parameter-select">
+                                            <option value="fixed">到期退出</option>
+                                            <option value="runner">强趋势尾仓续持</option>
+                                            <option value="trend">趋势有效续持</option>
+                                            <option value="profitable">盈利仓续持</option>
+                                            <option value="none">关闭时限</option>
+                                        </select>
+                                    </label>
+                                    <label class="parameter-row" for="researchChandelierAtrInput">
+                                        <span>吊灯ATR倍数</span>
+                                        <span class="parameter-value">
+                                            <input id="researchChandelierAtrInput" type="number" min="0.1" max="20" step="0.1">
+                                            <b>ATR</b>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <details class="settings-rule-summary research-4h-only research-4h-filter-summary" open hidden>
+                                <summary>
+                                    <span>4h筛选规则</span>
+                                    <b>准入</b>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="filter-rules">
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">候选准入</div>
+                                        <ul>
+                                            <li>USDT现货，上市满60天，24h成交额 ≥ 100万USDT</li>
+                                            <li id="researchTrendRule">EMA20 &gt; EMA50 &gt; EMA100，ADX ≥ 22</li>
+                                            <li id="researchQualityRule">RSI 38～68，量比 ≥ 0.5，ATR(14)占价格比例 0.4%～9%</li>
+                                            <li id="researchMarketRule">BTC趋势过滤开启，BTC ADX ≥ 12</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details class="settings-rule-summary research-4h-only research-4h-entry-summary" open hidden>
+                                <summary>
+                                    <span>4h入场规则</span>
+                                    <b id="researchEntryModeBadge">突破</b>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="filter-rules">
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">信号与排序</div>
+                                        <ul>
+                                            <li id="researchSetupRule">收盘突破此前10根4h最高价</li>
+                                            <li>候选评分 = ADX(14) + 当前量 / 20根均量</li>
+                                            <li>4h收盘冻结队列，下一根15m开盘买入</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details class="settings-rule-summary research-4h-only research-4h-exit-summary" open hidden>
+                                <summary>
+                                    <span>4h退出规则</span>
+                                    <b id="research4hModeBadge">自适应</b>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="filter-rules">
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">目标与保护</div>
+                                        <ul>
+                                            <li>1R = 入场价 - 初始止损价</li>
+                                            <li id="researchTargetRule">达到3.2R后判断是否进入强趋势跟踪</li>
+                                            <li id="researchBreakEvenRule">达到3R后将保护线上移至保本</li>
+                                            <li id="researchAdaptiveRule">ADX ≥ 20、斜率 ≥ 0.4%、RSI ≥ 65、量比 ≥ 2</li>
+                                            <li id="researchTrailingRule">保护线取3.5R与峰值减1ATR中的较高值</li>
+                                            <li id="researchBaseExitRule">初始硬/摆动止损；收盘跌破EMA20或MA7阈值退出</li>
+                                            <li id="researchChandelierRule">吊灯止损：22根最高价 - 3 × ATR(22)</li>
+                                            <li id="researchTimeRule">基础最长32小时；强趋势尾仓可续持</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details class="settings-rule-summary research-4h-only research-4h-execution-summary" open hidden>
+                                <summary>
+                                    <span>4h执行规则</span>
+                                    <b>仓位管理</b>
+                                    <i aria-hidden="true"></i>
+                                </summary>
+                                <div class="filter-rules">
+                                    <div class="rule-section">
+                                        <div class="rule-section-title">仓位与换仓</div>
+                                        <ul>
+                                            <li id="researchMaxOpenTradesRule">最大同时持有 1 个币种</li>
+                                            <li>持仓退出后按冻结队列依次补位，同一4h周期不重买已退出币种</li>
+                                            <li id="researchReplacementRule">换仓前至少持有8小时；新候选评分高出5分时换仓</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
                     </div>
 
                     <div class="settings-status">
@@ -499,7 +895,7 @@
                     <span class="section-label">历史选股回放</span>
                     <h2>策略回测</h2>
                     <p class="backtest-notice">
-                        使用当前可交易池回放，不包含历史期间已退市交易对；历史 24h 成交额按 15 分钟收盘价 × 成交量估算；结果已计入 0.1% 双边手续费。
+                        使用 Binance 历史 USDT 现货主表，包含区间内已下架交易对；24h 成交额使用归档原始 quote volume；历史 Monitoring/Seed 标签因无官方时序归档不追溯过滤；结果已计入 0.1% 双边手续费。
                     </p>
                 </div>
                 <div class="backtest-controls">
@@ -507,12 +903,12 @@
                         <span>回测区间</span>
                         <select id="backtestDaysInput">
                             <option value="7">近 7 天</option>
-                            <option value="30" selected>近 30 天</option>
+                            <option value="30">近 30 天</option>
                             <option value="60">近 60 天</option>
                             <option value="90">近 90 天</option>
                             <option value="180">近 180 天</option>
                             <option value="360">近 360 天</option>
-                            <option value="540">近 540 天</option>
+                            <option value="540" selected>近 540 天</option>
                         </select>
                     </label>
                     <label>

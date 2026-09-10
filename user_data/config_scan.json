@@ -188,6 +188,9 @@
             ".*(UP|DOWN|BULL|BEAR)/USDT",
             ".*([2-5]L|[2-5]S)/USDT",
 
+            // 排除 Binance bStocks 股票和 ETF 代币化产品。
+            "(AAPLB|AMATB|AMDB|ARMB|ASMLB|BABAB|CBRSB|COHRB|COINB|CRCLB|CRDOB|DJTB|EWYB|GMEB|GOOGLB|HOODB|INTCB|IRENB|MSTRB|MVLLB|NBISB|NVDAB|QQQB|RKLBB|SMCIB|SNDKB|SNXXB|SOXLB|SPCXB|SPYB|TSLAB)/USDT",
+
             // 排除稳定币及部分法币与 USDT 之间的交易对。
             "(USDC|FDUSD|TUSD|USDP|DAI|EUR|TRY|BRL)/USDT"
         ]

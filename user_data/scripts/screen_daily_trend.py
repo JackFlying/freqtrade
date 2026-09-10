@@ -5,6 +5,7 @@ import asyncio
 import csv
 import fcntl
 import json
+import math
 import os
 import re
 import sys
@@ -17,11 +18,19 @@ from urllib.request import Request, urlopen
 
 import ccxt.async_support as ccxt
 import pandas as pd
+from talib import abstract as ta
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from user_data.asset_filters import (
+    is_tokenized_stock_metadata,
+    is_tokenized_stock_pair,
+)
 from freqtrade.configuration.load_config import load_config_file
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT_DIR / "user_data/config_scan.json"
 DAY_MS = 24 * 60 * 60 * 1000
 BINANCE_ASSET_METADATA_URL = (
@@ -41,6 +50,13 @@ OUTPUT_COLUMNS = [
     "ma_99",
     "ma_99_is_temporary",
     "four_hour_alignment",
+    "adx_4h",
+    "relative_volume_4h",
+    "entry_score",
+    "atr_4h",
+    "atr22_4h",
+    "chandelier_high_4h",
+    "swing_low_4h",
     "change_20d",
     "drawdown_20d",
     "quote_volume_24h",
@@ -71,6 +87,12 @@ def parse_args() -> argparse.Namespace:
         "--loop",
         action="store_true",
         help="Run continuously using scanner.daily_trend.update_interval_seconds.",
+    )
+    parser.add_argument(
+        "--retry-delay-seconds",
+        type=int,
+        default=0,
+        help="Retry failed loop iterations after this delay; 0 waits for the next interval.",
     )
     parser.add_argument(
         "--settings-file",
@@ -107,13 +129,14 @@ def atomic_write_csv(path: Path, dataframe: pd.DataFrame) -> None:
 def load_runtime_settings(
     scanner_config: dict[str, Any],
     settings_file: Path | None = None,
-) -> dict[str, float | bool | int]:
+) -> dict[str, Any]:
     settings_path = (
         settings_file.resolve()
         if settings_file
         else ROOT_DIR / scanner_config["cache_directory"] / "runtime_settings.json"
     )
     defaults = {
+        "active_strategy": "strategy1",
         "min_change_20d": 5.0,
         "max_change_20d": 100.0,
         "max_drawdown_to_gain_ratio_pct": 50.0,
@@ -131,12 +154,18 @@ def load_runtime_settings(
         "candidate_scan_interval_seconds": int(
             scanner_config["update_interval_seconds"]
         ),
+        "research_4h": {},
     }
     if not settings_path.exists():
         return defaults
     try:
         payload = json.loads(settings_path.read_text(encoding="utf-8"))
         return {
+            "active_strategy": (
+                payload.get("active_strategy")
+                if payload.get("active_strategy") in {"strategy1", "strategy2"}
+                else defaults["active_strategy"]
+            ),
             "min_change_20d": float(
                 payload.get("min_change_20d", defaults["min_change_20d"])
             ),
@@ -232,6 +261,11 @@ def load_runtime_settings(
                         )
                     ),
                 ),
+            ),
+            "research_4h": (
+                payload.get("research_4h")
+                if isinstance(payload.get("research_4h"), dict)
+                else {}
             ),
         }
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -372,6 +406,8 @@ def parse_binance_risk_assets(payload: Any) -> dict[str, list[str]]:
             for tag in tags
             if str(tag).lower() in BINANCE_RISK_TAGS
         ]
+        if is_tokenized_stock_metadata(asset):
+            reasons.append("tag:bStocks")
         if asset.get("preDelist") is True:
             reasons.append("preDelist")
         if asset.get("delisted") is True:
@@ -507,6 +543,7 @@ async def refresh_universe(
             and pair
             and matches_any(pair, whitelist)
             and not matches_any(pair, blacklist)
+            and not is_tokenized_stock_pair(pair)
             and market.get("base") not in stablecoin_bases
             and pair not in recent_risk_pairs
             and str(market.get("base") or "").upper()
@@ -574,7 +611,7 @@ async def fetch_ohlcv_with_retry(
     return []
 
 
-async def has_four_hour_ma_alignment(
+async def analyze_four_hour_candidate(
     exchange: Any,
     pair: str,
     semaphore: asyncio.Semaphore,
@@ -582,7 +619,8 @@ async def has_four_hour_ma_alignment(
     require_ma7_reclaim: bool,
     ma7_reclaim_tolerance_pct: float,
     ma7_reclaim_lookback_bars: int,
-) -> bool:
+    strategy2_settings: dict[str, Any] | None = None,
+) -> dict[str, bool | float | None]:
     rows = await fetch_ohlcv_with_retry(
         exchange,
         pair,
@@ -592,15 +630,171 @@ async def has_four_hour_ma_alignment(
         semaphore,
     )
     dataframe = pd.DataFrame(rows, columns=OHLCV_COLUMNS)
-    if len(dataframe) < 99:
-        return False
+    if len(dataframe) < 100:
+        return {
+            "alignment": False,
+            "strategy2_candidate": False,
+            "strategy2_market_alignment": False,
+            "adx_4h": None,
+            "relative_volume_4h": None,
+            "entry_score": None,
+            "atr_4h": None,
+            "atr22_4h": None,
+            "chandelier_high_4h": None,
+            "swing_low_4h": None,
+        }
 
+    dataframe["date"] = pd.to_datetime(dataframe["date"], unit="ms", utc=True)
+    completed = dataframe.loc[
+        dataframe["date"] + pd.Timedelta(hours=4)
+        <= pd.Timestamp.now(tz="UTC")
+    ].copy()
+    if len(completed) < 100:
+        return {
+            "alignment": False,
+            "strategy2_candidate": False,
+            "strategy2_market_alignment": False,
+            "adx_4h": None,
+            "relative_volume_4h": None,
+            "entry_score": None,
+            "atr_4h": None,
+            "atr22_4h": None,
+            "chandelier_high_4h": None,
+            "swing_low_4h": None,
+        }
     for period in (7, 20, 99):
         dataframe[f"ma_{period}"] = dataframe["close"].rolling(
             window=period,
             min_periods=period,
         ).mean()
+    for period in (20, 50, 100):
+        completed[f"ema_{period}"] = ta.EMA(
+            completed,
+            timeperiod=period,
+        )
+    completed["rsi_4h"] = ta.RSI(completed, timeperiod=14)
+    completed["atr_4h"] = ta.ATR(completed, timeperiod=14)
+    completed["atr22_4h"] = ta.ATR(completed, timeperiod=22)
+    completed["adx_4h"] = ta.ADX(completed, timeperiod=14)
+    completed["volume_sma20_4h"] = completed["volume"].rolling(
+        window=20,
+        min_periods=20,
+    ).mean()
+    dataframe["adx_4h"] = ta.ADX(dataframe, timeperiod=14)
+    dataframe["volume_sma20_4h"] = dataframe["volume"].rolling(
+        window=20,
+        min_periods=20,
+    ).mean()
     latest = dataframe.iloc[-1]
+    score_row = completed.iloc[-1]
+    adx_4h = (
+        float(score_row["adx_4h"])
+        if pd.notna(score_row["adx_4h"])
+        else None
+    )
+    volume_sma20_4h = float(score_row["volume_sma20_4h"])
+    relative_volume_4h = (
+        float(score_row["volume"]) / volume_sma20_4h
+        if pd.notna(score_row["volume_sma20_4h"])
+        and volume_sma20_4h > 0
+        else None
+    )
+    entry_score = (
+        adx_4h + relative_volume_4h
+        if adx_4h is not None and relative_volume_4h is not None
+        else None
+    )
+    strategy2 = {
+        "mode": "breakout",
+        "adx_min": 22.0,
+        "rsi_min": 38.0,
+        "rsi_max": 68.0,
+        "volume_factor": 0.4,
+        "touch_pct": 2.5,
+        "breakout_bars": 10,
+        "ema20_slope_min": -0.1,
+        "atr_pct_min": 0.4,
+        "atr_pct_max": 9.0,
+        "market_adx_min": 12.0,
+        **(strategy2_settings or {}),
+    }
+    ema20 = float(score_row["ema_20"])
+    ema50 = float(score_row["ema_50"])
+    ema100 = float(score_row["ema_100"])
+    rsi_4h = float(score_row["rsi_4h"])
+    atr_4h = float(score_row["atr_4h"])
+    atr22_4h = float(score_row["atr22_4h"])
+    chandelier_high_4h = float(completed["high"].iloc[-22:].max())
+    swing_low_4h = float(completed["low"].iloc[-4:].min())
+    close_4h = float(score_row["close"])
+    slope_source = float(completed["ema_20"].iloc[-4])
+    ema20_slope = (
+        (ema20 / slope_source - 1.0) * 100.0
+        if math.isfinite(slope_source) and slope_source > 0
+        else float("nan")
+    )
+    atr_pct = (
+        atr_4h / close_4h * 100.0
+        if math.isfinite(atr_4h) and close_4h > 0
+        else float("nan")
+    )
+    breakout_bars = int(strategy2["breakout_bars"])
+    prior_high = float(
+        completed["high"].iloc[-breakout_bars - 1 : -1].max()
+    )
+    setup_matches = close_4h > prior_high
+    if strategy2["mode"] == "pullback":
+        setup_matches = bool(
+            float(score_row["low"])
+            <= ema20 * (1.0 + float(strategy2["touch_pct"]) / 100.0)
+            and close_4h > float(score_row["open"])
+            and close_4h > float(completed["high"].iloc[-2])
+        )
+    common_strategy2 = bool(
+        all(
+            value is not None and math.isfinite(value)
+            for value in (
+                close_4h,
+                ema20,
+                ema50,
+                ema100,
+                ema20_slope,
+                adx_4h,
+                rsi_4h,
+                atr_pct,
+                relative_volume_4h,
+                prior_high,
+            )
+        )
+        and close_4h > ema20 > ema50 > ema100
+        and ema20_slope > float(strategy2["ema20_slope_min"])
+        and adx_4h >= float(strategy2["adx_min"])
+        and float(strategy2["rsi_min"])
+        <= rsi_4h
+        <= float(strategy2["rsi_max"])
+        and float(strategy2["atr_pct_min"])
+        <= atr_pct
+        <= float(strategy2["atr_pct_max"])
+        and relative_volume_4h >= float(strategy2["volume_factor"])
+        and setup_matches
+    )
+    market_alignment = bool(
+        all(
+            value is not None and math.isfinite(value)
+            for value in (
+                close_4h,
+                ema20,
+                ema50,
+                ema100,
+                ema20_slope,
+                adx_4h,
+            )
+        )
+        and close_4h > ema100
+        and ema20 > ema50
+        and ema20_slope > float(strategy2["ema20_slope_min"])
+        and adx_4h >= float(strategy2["market_adx_min"])
+    )
     aligned = bool(
         latest["close"] > latest["ma_7"]
         and latest["ma_7"] > latest["ma_20"]
@@ -620,7 +814,18 @@ async def has_four_hour_ma_alignment(
             ma7_reclaim_tolerance_pct,
             ma7_reclaim_lookback_bars,
         )
-    return aligned
+    return {
+        "alignment": aligned,
+        "strategy2_candidate": common_strategy2,
+        "strategy2_market_alignment": market_alignment,
+        "adx_4h": adx_4h,
+        "relative_volume_4h": relative_volume_4h,
+        "entry_score": entry_score,
+        "atr_4h": atr_4h,
+        "atr22_4h": atr22_4h,
+        "chandelier_high_4h": chandelier_high_4h,
+        "swing_low_4h": swing_low_4h,
+    }
 
 
 async def update_pair(
@@ -717,7 +922,7 @@ async def update_pair(
         if any(pd.isna(value) for value in required_values):
             return None, f"{pair}: insufficient data for MA99"
 
-        common_candidate = bool(
+        strategy1_candidate = bool(
             change_20d > min_change_20d
             and change_20d < max_change_20d
             and change_20d > 0
@@ -748,8 +953,17 @@ async def update_pair(
             )
         use_four_hour_filter = bool(scanner_config["use_4h_ma_filter"])
         four_hour_alignment = None
-        if common_candidate and use_four_hour_filter:
-            four_hour_alignment = await has_four_hour_ma_alignment(
+        adx_4h = None
+        relative_volume_4h = None
+        entry_score = None
+        atr_4h = None
+        atr22_4h = None
+        chandelier_high_4h = None
+        swing_low_4h = None
+        strategy2_candidate = False
+        active_strategy = scanner_config.get("active_strategy", "strategy1")
+        if strategy1_candidate or active_strategy == "strategy2":
+            four_hour_analysis = await analyze_four_hour_candidate(
                 exchange,
                 pair,
                 semaphore,
@@ -757,11 +971,30 @@ async def update_pair(
                 ma7_reclaim_enabled,
                 ma7_reclaim_tolerance_pct,
                 ma7_reclaim_lookback_days,
+                scanner_config.get("research_4h", {}),
             )
+            four_hour_alignment = bool(four_hour_analysis["alignment"])
+            strategy2_candidate = bool(
+                four_hour_analysis["strategy2_candidate"]
+            )
+            adx_4h = four_hour_analysis["adx_4h"]
+            relative_volume_4h = four_hour_analysis["relative_volume_4h"]
+            entry_score = four_hour_analysis["entry_score"]
+            atr_4h = four_hour_analysis["atr_4h"]
+            atr22_4h = four_hour_analysis["atr22_4h"]
+            chandelier_high_4h = four_hour_analysis[
+                "chandelier_high_4h"
+            ]
+            swing_low_4h = four_hour_analysis["swing_low_4h"]
         selected_alignment = (
             four_hour_alignment if use_four_hour_filter else daily_alignment
         )
-        trend_candidate = common_candidate and selected_alignment is True
+        trend_candidate = (
+            strategy2_candidate
+            and bool(scanner_config.get("strategy2_market_allowed", True))
+            if active_strategy == "strategy2"
+            else strategy1_candidate and selected_alignment is True
+        )
         candle_time = pd.Timestamp(latest["date"])
         return (
             {
@@ -780,6 +1013,41 @@ async def update_pair(
                 "ma_99": round(float(latest["ma_99"]), 8),
                 "ma_99_is_temporary": completed_count < 99,
                 "four_hour_alignment": four_hour_alignment,
+                "adx_4h": (
+                    round(float(adx_4h), 8)
+                    if adx_4h is not None
+                    else None
+                ),
+                "relative_volume_4h": (
+                    round(float(relative_volume_4h), 8)
+                    if relative_volume_4h is not None
+                    else None
+                ),
+                "entry_score": (
+                    round(float(entry_score), 8)
+                    if entry_score is not None
+                    else None
+                ),
+                "atr_4h": (
+                    round(float(atr_4h), 8)
+                    if atr_4h is not None
+                    else None
+                ),
+                "atr22_4h": (
+                    round(float(atr22_4h), 8)
+                    if atr22_4h is not None
+                    else None
+                ),
+                "chandelier_high_4h": (
+                    round(float(chandelier_high_4h), 8)
+                    if chandelier_high_4h is not None
+                    else None
+                ),
+                "swing_low_4h": (
+                    round(float(swing_low_4h), 8)
+                    if swing_low_4h is not None
+                    else None
+                ),
                 "change_20d": round(float(change_20d), 2),
                 "drawdown_20d": round(float(drawdown_20d), 2),
                 "quote_volume_24h": round(
@@ -960,10 +1228,17 @@ def write_outputs(
     max_change_20d: float,
     lookback_days: int,
     use_4h_ma_filter: bool,
+    active_strategy: str,
 ) -> None:
     results.sort(
         key=lambda item: (
             not item["trend_candidate"],
+            -(
+                item.get("entry_score")
+                if active_strategy == "strategy2"
+                and item.get("entry_score") is not None
+                else 0.0
+            ),
             -item["quote_volume_24h"],
         )
     )
@@ -1035,12 +1310,16 @@ def write_outputs(
             "age_eligible_size": len(results),
             "candidate_size": len(candidates),
             "error_count": len(errors),
-            "uses_provisional_daily_candle": True,
-            "moving_average_type": "SMA",
+            "uses_provisional_daily_candle": active_strategy != "strategy2",
+            "moving_average_type": (
+                "EMA" if active_strategy == "strategy2" else "SMA"
+            ),
             "min_change_20d": min_change_20d,
             "max_change_20d": max_change_20d,
             "lookback_days": lookback_days,
             "ma_filter_timeframe": "4h" if use_4h_ma_filter else "1d",
+            "active_strategy": active_strategy,
+            "candidate_queue_frozen": active_strategy == "strategy2",
         },
     )
 
@@ -1100,6 +1379,7 @@ async def run_screen(args: argparse.Namespace) -> int:
                 for item in universe
                 if item["pair"] in exchange.markets
                 and exchange.markets[item["pair"]].get("active") is not False
+                and not is_tokenized_stock_pair(item["pair"])
             ]
         recent_risk_pairs = load_recent_risk_pairs(scanner_config)
         universe = [
@@ -1107,6 +1387,7 @@ async def run_screen(args: argparse.Namespace) -> int:
             for item in universe
             if item["pair"] not in recent_risk_pairs
             and base_asset(item["pair"]) not in binance_risk_assets
+            and not is_tokenized_stock_pair(item["pair"])
         ]
         atomic_write_json(
             universe_path,
@@ -1119,8 +1400,36 @@ async def run_screen(args: argparse.Namespace) -> int:
             },
         )
 
-        print(f"Updating provisional daily candles for {len(universe)} pairs...")
         semaphore = asyncio.Semaphore(int(scanner_config["concurrency"]))
+        active_strategy = str(
+            scanner_config.get("active_strategy", "strategy1")
+        )
+        market_allowed = True
+        research_4h = scanner_config.get("research_4h", {})
+        if (
+            active_strategy == "strategy2"
+            and bool(research_4h.get("market_filter", True))
+        ):
+            btc_analysis = await analyze_four_hour_candidate(
+                exchange,
+                "BTC/USDT",
+                semaphore,
+                False,
+                False,
+                1.0,
+                1,
+                research_4h,
+            )
+            market_allowed = bool(
+                btc_analysis["strategy2_market_alignment"]
+            )
+        scanner_config["strategy2_market_allowed"] = market_allowed
+        scan_description = (
+            "completed 4h strategy-2 candles"
+            if active_strategy == "strategy2"
+            else "provisional daily candles"
+        )
+        print(f"Updating {scan_description} for {len(universe)} pairs...")
         tasks = [
             update_pair(
                 exchange,
@@ -1164,6 +1473,7 @@ async def run_screen(args: argparse.Namespace) -> int:
             float(scanner_config["max_change_20d"]),
             int(scanner_config["lookback_days"]),
             bool(scanner_config["use_4h_ma_filter"]),
+            active_strategy,
         )
         candidate_count = sum(result["trend_candidate"] for result in results)
         if not is_preview:
@@ -1226,8 +1536,11 @@ def main() -> int:
         # the config value when the settings file is missing or malformed.
         runtime_settings = load_runtime_settings(scanner_config, args.settings_file)
         interval = int(runtime_settings["candidate_scan_interval_seconds"])
-        next_run = ((int(time.time()) // interval) + 1) * interval + 5
-        delay = max(1, next_run - int(time.time()))
+        if result != 0 and args.retry_delay_seconds > 0:
+            delay = max(1, args.retry_delay_seconds)
+        else:
+            next_run = ((int(time.time()) // interval) + 1) * interval + 5
+            delay = max(1, next_run - int(time.time()))
         print(f"Next update in {delay} seconds.", flush=True)
         time.sleep(delay)
 

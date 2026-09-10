@@ -13,11 +13,15 @@ from urllib.parse import quote
 import ccxt.async_support as ccxt
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from freqtrade.configuration.load_config import load_config_file
 from freqtrade.resolvers import StrategyResolver
+from user_data.asset_filters import is_tokenized_stock_pair
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT_DIR / "user_data/config_scan.json"
 CSV_FIELDS = [
     "rank",
@@ -84,6 +88,7 @@ def select_markets(
             and pair
             and matches_any(pair, whitelist)
             and not matches_any(pair, blacklist)
+            and not is_tokenized_stock_pair(pair)
         ):
             selected.append(market)
     return sorted(selected, key=lambda item: item["symbol"])
